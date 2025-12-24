@@ -11,6 +11,10 @@ class MockRepository {
         Room(floor: 7, roomNo: 502, bedCount: 8),
         Room(floor: 7, roomNo: 503, bedCount: 8),
         Room(floor: 7, roomNo: 504, bedCount: 8),
+        Room(floor: 7, roomNo: 505, bedCount: 8),
+        Room(floor: 7, roomNo: 506, bedCount: 8),
+        Room(floor: 7, roomNo: 507, bedCount: 8),
+        Room(floor: 7, roomNo: 508, bedCount: 8)
       ];
     }
     return const [];

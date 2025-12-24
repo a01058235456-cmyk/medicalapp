@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ward_providers.dart';
 import '../../../domain/models/room.dart';
 import 'bed_tile.dart';
+import 'dialogs/patient_detail_dialog.dart';
 import 'dialogs/patient_edit_dialog.dart';
 import 'dialogs/patient_add_dialog.dart';
 
@@ -42,7 +43,7 @@ class RoomCard extends ConsumerWidget {
               crossAxisCount: 4,
               mainAxisSpacing: 14,
               crossAxisSpacing: 14,
-              childAspectRatio: 1.92,
+              childAspectRatio: 1.05,
             ),
             itemBuilder: (context, i) {
               final bedNo = i + 1;
@@ -53,7 +54,8 @@ class RoomCard extends ConsumerWidget {
                 patient: patient,
                 onTap: () async {
                   if (patient != null) {
-                    await showDialog(context: context, builder: (_) => PatientEditDialog(patient: patient));
+                    await showDialog(
+                        context: context, builder: (_) => PatientDetailDialog(patientId: patient.id));
                   } else {
                     // 빈 침상 클릭 시: 해당 호실/침상으로 "환자 추가" 바로 열기(실무에서 편함)
                     await showDialog(

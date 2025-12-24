@@ -86,7 +86,6 @@ final sidePanelPatientsProvider = Provider<List<Patient>>((ref) {
 
 
   final result = filtered.toList();
-
   // ✅ 위험 우선 + 알람 많은 순 + 호실/침대 순 (realtime 우선)
   result.sort((a, b) {
     final sa = effectiveStatus(ref, a);
@@ -177,6 +176,14 @@ class RealtimeNotifier extends StateNotifier<Map<String, PatientRealtime>> {
     state = next;
   }
 
+
+
+
+
+
+
+
+
   // ✅ 나중에 하드웨어 이벤트(JSON) 받으면 여기로 꽂으면 됨
 
 
@@ -200,4 +207,66 @@ class RealtimeNotifier extends StateNotifier<Map<String, PatientRealtime>> {
 final realtimeProvider =
 StateNotifierProvider<RealtimeNotifier, Map<String, PatientRealtime>>(
       (ref) => RealtimeNotifier(),
+);
+class PatientVitals {
+  final double temp;
+  final int hr;
+  final int humidity;
+  final double weight;
+
+  const PatientVitals({
+    required this.temp,
+    required this.hr,
+    required this.humidity,
+    required this.weight,
+  });
+
+  // 프론트 더미
+  static PatientVitals mock() => const PatientVitals(
+    temp: 37.2,
+    hr: 72,
+    humidity: 45,
+    weight: 68.5,
+  );
+
+  PatientVitals copyWith({double? temp, int? hr, int? humidity, double? weight}) {
+    return PatientVitals(
+      temp: temp ?? this.temp,
+      hr: hr ?? this.hr,
+      humidity: humidity ?? this.humidity,
+      weight: weight ?? this.weight,
+    );
+  }
+}
+
+class VitalsNotifier extends StateNotifier<Map<String, PatientVitals>> {
+  VitalsNotifier() : super(const {});
+
+  void upsert(String patientId, PatientVitals v) {
+    state = {...state, patientId: v};
+  }
+
+  // 나중에 하드웨어에서 값 받을 때
+  void applyHardwareVitals({
+    required String patientId,
+    double? temp,
+    int? hr,
+    int? humidity,
+    double? weight,
+  }) {
+    final cur = state[patientId] ?? PatientVitals.mock();
+    upsert(
+      patientId,
+      cur.copyWith(
+        temp: temp,
+        hr: hr,
+        humidity: humidity,
+        weight: weight,
+      ),
+    );
+  }
+}
+
+final vitalsProvider = StateNotifierProvider<VitalsNotifier, Map<String, PatientVitals>>(
+      (ref) => VitalsNotifier(),
 );

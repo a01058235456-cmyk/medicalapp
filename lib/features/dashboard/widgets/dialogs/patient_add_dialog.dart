@@ -243,18 +243,6 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                     ),
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ),
-                  const Spacer(),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF22C55E),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-                    ),
                     onPressed: () {
                       final name = nameCtrl.text.trim();
                       final age = int.tryParse(ageCtrl.text.trim());
@@ -300,6 +288,18 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
                       Navigator.pop(context);
                     },
                     child: const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+                  const Spacer(),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF22C55E),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
                   ),
                 ],
               ),

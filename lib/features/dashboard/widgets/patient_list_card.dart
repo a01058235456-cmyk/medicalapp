@@ -34,7 +34,7 @@ class PatientListCard extends ConsumerWidget {
     final rt = rtMap[patient.id];
 
     final status = rt?.status ?? patient.status;
-    final alarmCount = rt?.alarmCount ?? patient.alarmCount;
+
 
     final c = statusColor(status);
 
@@ -69,14 +69,6 @@ class PatientListCard extends ConsumerWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (alarmCount > 0)
-                        Row(
-                          children: [
-                            const Icon(Icons.notifications_none_rounded, size: 18, color: Color(0xFFEF4444)),
-                            const SizedBox(width: 4),
-                            Text('$alarmCount', style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFEF4444))),
-                          ],
-                        ),
                     ],
                   ),
                   const SizedBox(height: 4),
