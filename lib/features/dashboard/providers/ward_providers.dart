@@ -208,33 +208,54 @@ final realtimeProvider =
 StateNotifierProvider<RealtimeNotifier, Map<String, PatientRealtime>>(
       (ref) => RealtimeNotifier(),
 );
+
+
+
+//움직임
+enum MovementStatus {
+  stable,      // 안정
+  caution,     // 주의
+  reposition,  // 체위변경필요
+}
+
+extension MovementStatusLabel on MovementStatus {
+  String get label => switch (this) {
+    MovementStatus.stable => '안정',
+    MovementStatus.caution => '주의',
+    MovementStatus.reposition => '체위변경필요',
+  };
+}
+
+//실시간 바이탈 사인
 class PatientVitals {
-  final double temp;
-  final int hr;
-  final int humidity;
-  final double weight;
+  final double bodytemp;
+  final double roomtemp;
+  final double humidity;
+  final MovementStatus movement;
 
   const PatientVitals({
-    required this.temp,
-    required this.hr,
+    required this.bodytemp,
+    required this.roomtemp,
     required this.humidity,
-    required this.weight,
+    required this.movement,
   });
+
+
 
   // 프론트 더미
   static PatientVitals mock() => const PatientVitals(
-    temp: 37.2,
-    hr: 72,
+    bodytemp: 37.2,
+    roomtemp: 18.8,
     humidity: 45,
-    weight: 68.5,
+    movement: MovementStatus.stable,
   );
 
-  PatientVitals copyWith({double? temp, int? hr, int? humidity, double? weight}) {
+  PatientVitals copyWith({double? bodytemp, double? roomtemp, double? humidity, MovementStatus? movement}) {
     return PatientVitals(
-      temp: temp ?? this.temp,
-      hr: hr ?? this.hr,
+      bodytemp: bodytemp ?? this.bodytemp,
+      roomtemp: roomtemp ?? this.roomtemp,
       humidity: humidity ?? this.humidity,
-      weight: weight ?? this.weight,
+      movement: movement ?? this.movement,
     );
   }
 }
@@ -249,19 +270,19 @@ class VitalsNotifier extends StateNotifier<Map<String, PatientVitals>> {
   // 나중에 하드웨어에서 값 받을 때
   void applyHardwareVitals({
     required String patientId,
-    double? temp,
-    int? hr,
-    int? humidity,
-    double? weight,
+    double? bodytemp,
+    double? roomtemp,
+    double? humidity,
+    MovementStatus? movement,
   }) {
     final cur = state[patientId] ?? PatientVitals.mock();
     upsert(
       patientId,
       cur.copyWith(
-        temp: temp,
-        hr: hr,
+        bodytemp: bodytemp,
+        roomtemp: roomtemp,
         humidity: humidity,
-        weight: weight,
+        movement: movement,
       ),
     );
   }

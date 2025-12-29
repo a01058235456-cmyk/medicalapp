@@ -8,6 +8,7 @@ import 'patient_edit_dialog.dart';
 
 
 
+
 class PatientDetailDialog extends ConsumerWidget {
   final String patientId;
   const PatientDetailDialog({super.key, required this.patientId});
@@ -148,16 +149,20 @@ class PatientDetailDialog extends ConsumerWidget {
                     const Text('실시간 바이탈 사인', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
                     const SizedBox(height: 14),
 
+
+
+
+
                     // 바이탈 카드 4개
                     Row(
                       children: [
-                        Expanded(child: _VitalMiniCard(title: '체온', value: '${v.temp.toStringAsFixed(1)}°C', icon: Icons.thermostat_outlined, iconColor: const Color(0xFF2563EB))),
+                        Expanded(child: _VitalMiniCard(title: '체온', value: '${v.bodytemp.toStringAsFixed(1)}°C', icon: Icons.thermostat_outlined, iconColor: const Color(0xFF2563EB))),
                         const SizedBox(width: 16),
-                        Expanded(child: _VitalMiniCard(title: '심박수', value: '${v.hr} bpm', icon: Icons.monitor_heart_outlined, iconColor: const Color(0xFFDC2626))),
+                        Expanded(child: _VitalMiniCard(title: '병실온도', value: '${v.roomtemp.toStringAsFixed(1)} °C', icon: Icons.thermostat_outlined, iconColor: const Color(0xFFDC2626))),
                         const SizedBox(width: 16),
-                        Expanded(child: _VitalMiniCard(title: '습도', value: '${v.humidity}%', icon: Icons.water_drop_outlined, iconColor: const Color(0xFF0EA5E9))),
+                        Expanded(child: _VitalMiniCard(title: '습도', value: '${v.humidity.toStringAsFixed(0)}%', icon: Icons.water_drop_outlined, iconColor: const Color(0xFF0EA5E9))),
                         const SizedBox(width: 16),
-                        Expanded(child: _VitalMiniCard(title: '체중', value: '${v.weight.toStringAsFixed(1)} kg', icon: Icons.monitor_weight_outlined, iconColor: const Color(0xFF7C3AED))),
+                        Expanded(child: _VitalMiniCard(title: '움직임', value: '${v.movement.label} ', icon: Icons.accessibility_new_outlined, iconColor: const Color(0xFF7C3AED))),
                       ],
                     ),
 
@@ -168,7 +173,7 @@ class PatientDetailDialog extends ConsumerWidget {
                       children: [
                         Expanded(child: _GraphCard(title: '체온 추이', child: _PlaceholderGraph())),
                         const SizedBox(width: 16),
-                        Expanded(child: _GraphCard(title: '심박수 추이', child: _PlaceholderGraph())),
+                        Expanded(child: _GraphCard(title: '병실온도 추이', child: _PlaceholderGraph())),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -176,7 +181,7 @@ class PatientDetailDialog extends ConsumerWidget {
                       children: [
                         Expanded(child: _GraphCard(title: '습도 추이', child: _PlaceholderGraph())),
                         const SizedBox(width: 16),
-                        Expanded(child: _GraphCard(title: '체중 추이', child: _PlaceholderGraph())),
+                        Expanded(child: _GraphCard(title: '움직임 추이', child: _PlaceholderGraph())),
                       ],
                     ),
                   ],

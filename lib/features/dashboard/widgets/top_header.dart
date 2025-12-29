@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ward_providers.dart';
+import './dialogs/SettingsDialog.dart';
 
 class TopHeader extends ConsumerWidget {
   const TopHeader({super.key});
@@ -57,7 +58,11 @@ class TopHeader extends ConsumerWidget {
           _IconWithDot(
             icon: Icons.settings_outlined,
             dot: true,
-            onTap: () {},
+            onTap: () {showDialog(
+                context: context,
+                builder: (_) => SettingsDialog()
+            );
+                },
           ),
         ],
       ),

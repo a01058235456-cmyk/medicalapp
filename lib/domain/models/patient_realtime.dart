@@ -11,6 +11,7 @@ class PatientRealtime {
     required this.updatedAt,
   });
 
+
   PatientRealtime copyWith({
     RiskStatus? status,
     int? alarmCount,
