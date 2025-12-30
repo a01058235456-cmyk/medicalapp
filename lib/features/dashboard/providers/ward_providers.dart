@@ -1,15 +1,18 @@
-import 'package:flutter_riverpod/legacy.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../data/mock/mock_repository.dart';
 import '../../../domain/models/patient.dart';
 import '../../../domain/models/room.dart';
 import '../../../domain/models/patient_realtime.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../domain/models/ward.dart'; // ✅ 추가
 
+final selectedWardProvider = StateProvider<Ward?>((ref) => null);
 //환자별 실시간 우선 값
 RiskStatus effectiveStatus(Ref ref, Patient p) {
   final rt = ref.watch(realtimeProvider)[p.id];
   return rt?.status ?? p.status;
 }
+
 
 
 final repoProvider = Provider<MockRepository>((ref) => MockRepository());
@@ -50,7 +53,6 @@ final patientListProvider = StateNotifierProvider<PatientNotifier, List<Patient>
 enum PatientTab { all, danger, warning, stable }
 
 final patientTabProvider = StateProvider<PatientTab>((ref) => PatientTab.all);
-
 final selectedPatientIdProvider = StateProvider<String?>((ref) => null);
 
 final patientsInSelectedFloorProvider = Provider<List<Patient>>((ref) {
