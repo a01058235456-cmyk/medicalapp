@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart'; // ✅ 추가 (go_router 쓰는 경우)
+
 import '../providers/ward_providers.dart';
-import '../../../domain/models/patient.dart';
 import 'patient_list_card.dart';
 import 'dialogs/patient_add_dialog.dart';
 import 'dialogs/patient_edit_dialog.dart';
+import 'side_panel_action_button.dart';
 
 class SidePanel extends ConsumerStatefulWidget {
   const SidePanel({super.key});
@@ -112,6 +114,28 @@ class _SidePanelState extends ConsumerState<SidePanel> {
                   );
                 },
               ),
+            ),
+          ),
+
+          // ✅ 여기부터 하단 고정 버튼
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 18),
+            child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+          ),
+          const SizedBox(height: 12),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+            child: SidePanelActionButton(
+              label: '병동 선택',
+              icon: Icons.apartment_rounded,
+              onTap: () {
+                // ✅ go_router 사용 시 (라우트는 프로젝트에 맞게 변경)
+                context.go('/login');
+
+                // ✅ 만약 Navigator를 쓰고 있다면 아래로 바꾸세요
+                // Navigator.of(context).pushNamed('/ward-select');
+              },
             ),
           ),
         ],

@@ -261,7 +261,7 @@ class _WardButtons extends ConsumerWidget {
                   ref.read(selectedWardProvider.notifier).state = w;
                   context.go('/dashboard'); // 선택된 병동은 provider로 전달
                 },
-                child: Text(w.name),
+                child: Text(w.categoryName),
               ),
               const SizedBox(height: 10),
             ],

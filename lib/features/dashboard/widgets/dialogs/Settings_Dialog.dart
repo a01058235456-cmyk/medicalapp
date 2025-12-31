@@ -350,15 +350,6 @@ class _PasswordChangeView extends StatelessWidget {
       title: '비밀번호 변경',
       child: Column(
         children: [
-          TextField(
-            obscureText: true,
-            decoration: InputDecoration(
-              labelText: '현재 비밀번호',
-              filled: true,
-              fillColor: const Color(0xFFF9FAFB),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
           const SizedBox(height: 12),
           TextField(
             obscureText: true,

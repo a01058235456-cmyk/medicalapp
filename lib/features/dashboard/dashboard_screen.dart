@@ -91,7 +91,7 @@ class DashboardScreen extends ConsumerWidget {
 
                             // ✅ 병동명 + 층 표시
                             Text(
-                              '${ward.name} · ${floor}층 병동',
+                              '${ward.categoryName} · ${floor}층 병동',
                               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
                             ),
                             const SizedBox(height: 10),

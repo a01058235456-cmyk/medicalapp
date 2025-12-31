@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ward_providers.dart';
-import './dialogs/SettingsDialog.dart';
+import './dialogs/Settings_Dialog.dart';
 
 class TopHeader extends ConsumerWidget {
   const TopHeader({super.key});

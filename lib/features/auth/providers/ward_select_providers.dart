@@ -18,12 +18,13 @@ final wardRepositoryProvider = Provider<WardRepository>((ref) {
 /// 사용자가 선택한 병동(대시보드에서 읽음)
 // final selectedWardProvider = StateProvider<Ward?>((ref) => null);
 /// 더미: 나중에 DB/백엔드로 교체할 자리
+///
+///
 final wardListProvider = FutureProvider<List<Ward>>((ref) async {
   await Future.delayed(const Duration(milliseconds: 250));
   return const [
-    Ward(id: 'ward-1', name: '1병동'),
-    Ward(id: 'ward-2', name: '2병동'),
-    Ward(id: 'ward-3', name: '3병동'),
-    Ward(id: 'ward-icu', name: '중환자실'),
+    Ward(hospitalStCode: 1, categoryName: 'A병동', sortOrder: 1),
+    Ward(hospitalStCode: 2, categoryName: 'B병동', sortOrder: 2),
+    Ward(hospitalStCode: 3, categoryName: 'C병동', sortOrder: 3)
   ];
 });
