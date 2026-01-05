@@ -1,19 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import '../../../data/mock/mock_repository.dart';
 import '../../../domain/models/patient.dart';
 import '../../../domain/models/room.dart';
 import '../../../domain/models/patient_realtime.dart';
-import '../../../domain/models/ward.dart'; // ✅ 병동 모델
-
-// ✅ (추가) 병동 목록/추가를 백엔드 연동형으로 만들기 위한 Repository
-// - 아래 import 경로는 마스터님 프로젝트 실제 위치에 맞게 조정하세요.
+import '../../../domain/models/ward.dart';
 import '../../../data/ward_repository.dart';
 import '../../../data/mock/mock_ward_repository.dart';
 
-/// =============================================================
-/// 0) 병동(ward) 선택 상태 + 병동 목록/추가(버튼 기능용) Provider
-/// =============================================================
 
 /// ✅ 현재 선택된 병동(병동 선택 화면에서 탭하면 여기에 저장)
 final selectedWardProvider = StateProvider<Ward?>((ref) => null);
@@ -193,6 +186,7 @@ final sidePanelPatientsProvider = Provider<List<Patient>>((ref) {
 
   return result;
 });
+
 
 /// =============================================================
 /// 8) 요약 카운트(전체/위험/주의/안정)

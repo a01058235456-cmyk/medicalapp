@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'providers/ward_select_providers.dart' as ws;
 import '../dashboard/providers/ward_providers.dart'as dp;
-
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
 
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -18,7 +20,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final pwCtrl = TextEditingController();
 
   bool loading = false;
-  bool authed = true; // 로그인 성공 여부(성공 시 병동 선택 화면으로 전환)
+  bool authed = false; // 로그인 성공 여부(성공 시 병동 선택 화면으로 전환)
 //true 자동 로그인 // false 로그인 해야함
 
   @override
@@ -29,7 +31,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   Future<void> _mockLogin() async {
-    // TODO(백엔드 연동): 여기서 auth api 호출 -> 토큰 저장(SecureKV) 등으로 변경
     final id = idCtrl.text.trim();
     final pw = pwCtrl.text.trim();
 
@@ -39,11 +40,72 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
 
     setState(() => loading = true);
-    await Future.delayed(const Duration(milliseconds: 450));
-    setState(() {
-      loading = false;
-      authed = true;
-    });
+
+    try {
+      // ✅ 실행 환경에 맞게 baseUrl 수정
+      // - Web(Chrome) / Windows 데스크톱: localhost
+      // - Android Emulator: 10.0.2.2
+      final baseUrl = kIsWeb ? 'http://localhost:3000' : 'http://localhost:3000';
+      // 안드 에뮬이면 아래로:
+      // final baseUrl = 'http://10.0.2.2:3000';
+
+      final uri = Uri.parse('$baseUrl/auth/login');
+
+      final res = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'hospital_id': id,
+          'hospital_password': pw,
+        }),
+      );
+
+      debugPrint('[LOGIN] status=${res.statusCode}');
+      debugPrint('[LOGIN] body=${res.body}');
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        setState(() {
+          loading = false;
+          authed = false;
+        });
+        _snack('로그인 실패(HTTP ${res.statusCode})');
+        return;
+      }
+
+      final decoded = jsonDecode(res.body);
+      final ok = (decoded is Map) && (decoded['code'] == 1);
+      final data = decoded['data'] as Map<String, dynamic>;
+
+      if (ok) {
+        final data = (decoded as Map<String, dynamic>)['data'] as Map<String, dynamic>;
+        final hospitalCode = int.parse(data['hospital_code'].toString());
+
+        // ✅ 여기! 로그인 성공하면 hospital_code 저장 (병동 목록 호출 트리거)
+        ref.read(ws.hospitalCodeProvider.notifier).state = hospitalCode;
+
+        // (선택) 병동 목록 강제 새로고침
+        ref.invalidate(ws.wardListProvider);
+      }
+
+      setState(() {
+        loading = false;
+        authed = ok;
+      });
+
+      if (!ok) {
+        final msg = (decoded is Map && decoded['data'] is Map)
+            ? (decoded['data']['message']?.toString() ?? '로그인 실패')
+            : '로그인 실패';
+        _snack(msg);
+      }
+    } catch (e) {
+      debugPrint('[LOGIN] error=$e');
+      setState(() {
+        loading = false;
+        authed = false;
+      });
+      _snack('요청 실패: $e');
+    }
   }
 
   void _snack(String msg) {
@@ -51,6 +113,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       SnackBar(content: Text(msg)),
     );
   }
+
+
+
+
+
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +132,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         onPressed: () {
           // 병동 선택 화면에서 다시 로그인 화면으로 돌아가기
           ref.read(ws.selectedWardProvider.notifier).state = null;
+          ref.invalidate(ws.wardListProvider);
           setState(() => authed = false);
         },
         child: const Text('다른 계정으로 로그인'),
@@ -300,7 +370,18 @@ class _WardButtons extends ConsumerWidget {
                 try {
                   // ✅ hospitalCode 가져오기 (있으면 provider 사용 / 없으면 1로 임시)
                   // final hospitalCode = ref.read(hospitalCodeProvider);
-                  const hospitalCode = 1;
+                  final hospitalCode = ref.read(ws.hospitalCodeProvider);
+                  if (hospitalCode == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('병원 코드가 없습니다. 다시 로그인해 주세요.')),
+                    );
+                    return;
+                  }
+
+                  await ref.read(ws.wardRepositoryProvider).createWard(
+                    hospitalCode: hospitalCode,
+                    categoryName: name,
+                  );
 
                   // ✅ 백엔드 연동 대비: Repository의 createWard 호출
                   await ref.read(ws.wardRepositoryProvider).createWard(

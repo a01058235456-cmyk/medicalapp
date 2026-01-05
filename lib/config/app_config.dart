@@ -4,9 +4,9 @@ class AppConfig {
 
   const AppConfig({required this.baseUrl, required this.env});
   // ✅ 지금은 true로 더미 동작
-  static const bool useMockBackend = true;
-  // static const String apiBaseUrl = 'http://localhost:4000'; // 크롬,윈도우 용
-  static const String apiBaseUrl = 'http://10.0.2.2:4000'; //애뮬레이터 Test
+  static const bool useMockBackend = false;
+    static const String apiBaseUrl = 'http://localhost:3000'; // 크롬,윈도우 용
+  // static const String apiBaseUrl = 'http://10.0.2.2:3000'; //애뮬레이터 Test
 
   factory AppConfig.fromEnv() {
     const baseUrl = String.fromEnvironment('BASE_URL', defaultValue: 'http://10.0.2.2:8080');

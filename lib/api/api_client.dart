@@ -30,6 +30,13 @@ class ApiClient {
         },
       ),
     );
+    //개발용 나중에 제거하면 됨
+    dio.interceptors.add(LogInterceptor(
+      request: true,
+      requestBody: true,
+      responseBody: true,
+      error: true,
+    ));
 
     return ApiClient._(dio);
   }
