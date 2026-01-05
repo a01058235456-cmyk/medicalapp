@@ -140,17 +140,6 @@ class PatientDetailDialog extends ConsumerWidget {
                   ),
 
                   const Spacer(),
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF374151),
-                      side: const BorderSide(color: Color(0xFFE5E7EB)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ),
-                  const SizedBox(width: 10),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF22C55E),
@@ -166,6 +155,17 @@ class PatientDetailDialog extends ConsumerWidget {
                       );
                     },
                     child: const Text('수정', style: TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+                  const SizedBox(width: 10),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF374151),
+                      side: const BorderSide(color: Color(0xFFE5E7EB)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
                   ),
                 ],
               ),

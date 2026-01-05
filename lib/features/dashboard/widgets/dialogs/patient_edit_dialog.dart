@@ -245,66 +245,78 @@ class _PatientEditDialogState extends ConsumerState<PatientEditDialog> {
 
             Padding(
               padding: const EdgeInsets.fromLTRB(22, 14, 22, 16),
-              child: Row(
-                children: [
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF374151),
-                      side: const BorderSide(color: Color(0xFFE5E7EB)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ),
-                  const Spacer(),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF22C55E),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-                    ),
-                    onPressed: () {
-                      final name = nameCtrl.text.trim();
-                      final age = int.tryParse(ageCtrl.text.trim());
-                      final diag = diagnosisCtrl.text.trim();
-                      final doc = physicianCtrl.text.trim();
+              child: Align(
+                alignment: Alignment.centerRight, // ✅ 오른쪽 끝 고정
+                child: Row(
+                  mainAxisSize: MainAxisSize.min, // ✅ 버튼 2개 너비만큼만(서로 붙음)
+                  children: [
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF22C55E),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+                      ),
+                      onPressed: () {
+                        final name = nameCtrl.text.trim();
+                        final age = int.tryParse(ageCtrl.text.trim());
+                        final diag = diagnosisCtrl.text.trim();
+                        final doc = physicianCtrl.text.trim();
 
-                      if (name.isEmpty || age == null || gender.isEmpty || birthDate == null || diag.isEmpty || doc.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('필수 항목(환자명/나이/성별/생년월일/진단명/주치의)을 확인해 주세요.')),
+                        if (name.isEmpty ||
+                            age == null ||
+                            gender.isEmpty ||
+                            birthDate == null ||
+                            diag.isEmpty ||
+                            doc.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('필수 항목(환자명/나이/성별/생년월일/진단명/주치의)을 확인해 주세요.'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        final updated = widget.patient.copyWith(
+                          name: name,
+                          age: age,
+                          gender: gender,
+                          birthDate: birthDate,
+                          ward: ward,
+                          floor: floor,
+                          roomNo: roomNo,
+                          bedNo: bedNo,
+                          diagnosis: diag,
+                          physician: doc,
+                          nurse: nurseCtrl.text.trim(),
+                          allergy: allergyCtrl.text.trim(),
+                          note: noteCtrl.text.trim(),
                         );
-                        return;
-                      }
 
-                      final updated = widget.patient.copyWith(
-                        name: name,
-                        age: age,
-                        gender: gender,
-                        birthDate: birthDate,
-                        ward: ward,
-                        floor: floor,
-                        roomNo: roomNo,
-                        bedNo: bedNo,
-                        diagnosis: diag,
-                        physician: doc,
-                        nurse: nurseCtrl.text.trim(),
-                        allergy: allergyCtrl.text.trim(),
-                        note: noteCtrl.text.trim(),
-                        // status: status,
-                        // alarmCount: status == RiskStatus.danger ? (widget.patient.alarmCount == 0 ? 1 : widget.patient.alarmCount) : 0,
-                      );
+                        ref.read(patientListProvider.notifier).update(updated);
+                        Navigator.pop(context);
+                      },
+                      child: const Text('수정', style: TextStyle(fontWeight: FontWeight.w900)),
+                    ),
 
-                      ref.read(patientListProvider.notifier).update(updated);
-                      Navigator.pop(context);
-                    },
-                    child: const Text('수정', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ),
-                ],
+                    // ✅ 간격 없이 “붙이기”라면 SizedBox 없음
+
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF374151),
+                        side: const BorderSide(color: Color(0xFFE5E7EB)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
+                    ),
+                  ],
+                ),
               ),
             ),
+
           ],
         ),
       ),

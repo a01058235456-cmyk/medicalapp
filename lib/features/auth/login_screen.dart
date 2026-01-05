@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'providers/ward_select_providers.dart';
-import '../dashboard/providers/ward_providers.dart';
+import 'providers/ward_select_providers.dart' as ws;
+import '../dashboard/providers/ward_providers.dart'as dp;
 
 
 
@@ -19,6 +19,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   bool loading = false;
   bool authed = true; // 로그인 성공 여부(성공 시 병동 선택 화면으로 전환)
+//true 자동 로그인 // false 로그인 해야함
 
   @override
   void dispose() {
@@ -61,7 +62,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ? TextButton(
         onPressed: () {
           // 병동 선택 화면에서 다시 로그인 화면으로 돌아가기
-          ref.read(selectedWardProvider.notifier).state = null;
+          ref.read(ws.selectedWardProvider.notifier).state = null;
           setState(() => authed = false);
         },
         child: const Text('다른 계정으로 로그인'),
@@ -216,10 +217,14 @@ class _LoginForm extends StatelessWidget {
   }
 }
 
+
+//병동 선택 라인-------------------------------------------------------------------------------
 class _WardButtons extends ConsumerWidget {
+  const _WardButtons({super.key});
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncWards = ref.watch(wardListProvider);
+    final asyncWards = ref.watch(ws.wardListProvider);
 
     final btnStyle = ElevatedButton.styleFrom(
       backgroundColor: const Color(0xFF65C466), // 로그인 버튼과 동일 톤
@@ -230,6 +235,15 @@ class _WardButtons extends ConsumerWidget {
       elevation: 0,
     );
 
+    // ✅ "추가" 버튼은 살짝 구분되는 스타일(테두리형) 추천
+    final addBtnStyle = OutlinedButton.styleFrom(
+      foregroundColor: const Color(0xFF65C466),
+      side: const BorderSide(color: Color(0xFF65C466), width: 1.2),
+      minimumSize: const Size.fromHeight(48),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+    );
+
     return asyncWards.when(
       loading: () => const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
@@ -238,34 +252,82 @@ class _WardButtons extends ConsumerWidget {
       error: (e, _) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('병동 목록을 불러오지 못했습니다.', style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800)),
+          const Text(
+            '병동 목록을 불러오지 못했습니다.',
+            style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800),
+          ),
           const SizedBox(height: 10),
           OutlinedButton(
-            onPressed: () => ref.invalidate(wardListProvider),
+            onPressed: () => ref.invalidate(ws.wardListProvider),
             child: const Text('다시 시도'),
           ),
         ],
       ),
       data: (wards) {
-        if (wards.isEmpty) {
-          return const Text('등록된 병동이 없습니다.', style: TextStyle(fontWeight: FontWeight.w800));
-        }
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (final w in wards) ...[
-              ElevatedButton(
-                style: btnStyle,
-                onPressed: () {
-                  ref.read(selectedWardProvider.notifier).state = w;
-                  context.go('/dashboard'); // 선택된 병동은 provider로 전달
-                },
-                child: Text(w.categoryName),
-              ),
-              const SizedBox(height: 10),
-            ],
-            const SizedBox(height: 2),
+            if (wards.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 6),
+                child: Text('등록된 병동이 없습니다.', style: TextStyle(fontWeight: FontWeight.w800)),
+              )
+            else
+              for (final w in wards) ...[
+                ElevatedButton(
+                  style: btnStyle,
+                  onPressed: () {
+                    ref.read(dp.selectedWardProvider.notifier).state = w;
+
+                    GoRouter.of(context).go('/dashboard'); // 선택된 병동은 provider로 전달
+                  },
+                  child: Text(w.categoryName),
+                ),
+                const SizedBox(height: 10),
+              ],
+
+            const SizedBox(height: 6),
+
+            /// ✅ 병동 추가 버튼
+            OutlinedButton.icon(
+              style: addBtnStyle,
+              icon: const Icon(Icons.add),
+              label: const Text('병동 추가'),
+              onPressed: () async {
+                final name = await _showAddWardDialog(context);
+                if (name == null) return;
+
+                try {
+                  // ✅ hospitalCode 가져오기 (있으면 provider 사용 / 없으면 1로 임시)
+                  // final hospitalCode = ref.read(hospitalCodeProvider);
+                  const hospitalCode = 1;
+
+                  // ✅ 백엔드 연동 대비: Repository의 createWard 호출
+                  await ref.read(ws.wardRepositoryProvider).createWard(
+                    hospitalCode: hospitalCode,
+                    categoryName: name,
+                  );
+
+                  // ✅ 목록 다시 로드
+                  ref.invalidate(ws.wardListProvider);
+
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('병동이 추가되었습니다: $name')),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('병동 추가 실패: $e')),
+                    );
+                  }
+                }
+              },
+            ),
+
+            const SizedBox(height: 10),
+
             const Text(
               '※ 병동 목록은 (추후) DB/백엔드에서 받아 자동 생성됩니다.',
               style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12, fontWeight: FontWeight.w700),
@@ -274,6 +336,113 @@ class _WardButtons extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  Future<String?> _showAddWardDialog(BuildContext context) async {
+    final ctrl = TextEditingController();
+
+    const green = Color(0xFF16A34A); // 포인트 그린(원하시면 앱에서 쓰는 그린으로 교체)
+    const border = Color(0xFFE5E7EB); // 연한 그레이
+    const text = Color(0xFF111827); // 거의 블랙
+    const subText = Color(0xFF6B7280);
+
+    return showDialog<String?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) =>
+          AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            // M3 틴트 제거(톤 안정)
+            elevation: 0,
+            insetPadding: const EdgeInsets.symmetric(
+                horizontal: 20, vertical: 24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: const BorderSide(color: border),
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+            contentPadding: const EdgeInsets.fromLTRB(20, 6, 20, 2),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+
+            title: const Text(
+              '병동 추가',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 18,
+                color: text,
+              ),
+            ),
+
+            content: TextField(
+              controller: ctrl,
+              autofocus: true,
+              cursorColor: green,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: text,
+              ),
+              decoration: InputDecoration(
+                hintText: '예) 3병동, 중환자실, VIP실',
+                hintStyle: const TextStyle(
+                  color: subText,
+                  fontWeight: FontWeight.w600,
+                ),
+                isDense: true,
+                filled: true,
+                fillColor: const Color(0xFFF9FAFB),
+                // 아주 연한 회색(화이트 톤 유지)
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 12),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: green, width: 1.6),
+                ),
+              ),
+              onSubmitted: (_) {
+                final v = ctrl.text.trim();
+                if (v.isEmpty) return;
+                Navigator.pop(ctx, v);
+              },
+            ),
+
+            actions: [
+              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: subText,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('취소'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: green,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                onPressed: () {
+                  final v = ctrl.text.trim();
+                  if (v.isEmpty) return;
+                  Navigator.pop(ctx, v);
+                },
+                child: const Text('추가'),
+              ),
+            ],
+          ),
     );
   }
 }
