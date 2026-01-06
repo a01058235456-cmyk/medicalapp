@@ -6,7 +6,6 @@ import '../../../domain/models/patient_realtime.dart';
 import '../../../domain/models/ward.dart';
 import '../../../data/ward_repository.dart';
 import '../../../api/services/auth_api.dart';
-import '../../../app/providers/core_providers.dart';
 import '../../auth/providers/ward_select_providers.dart';
 import '../../../api/services/hospital_structure_service.dart';
 import '../../../data/dio_ward_repository.dart';
@@ -17,13 +16,6 @@ final selectedWardProvider = StateProvider<Ward?>((ref) => null);
 
 /// ✅ 병원 코드: 로그인 성공 후 세팅(권장: nullable)
 final hospitalCodeProvider = StateProvider<int?>((ref) => null);
-
-/// ✅ WardRepository: Mock ↔ Dio 스위치
-final wardRepositoryProvider = Provider<WardRepository>((ref) {
-    final client = ref.watch(apiClientProvider); // ✅ 이걸로 박으세요
-    final svc = HospitalStructureService(client);
-    return DioWardRepository(svc);
-  });
 
 
 

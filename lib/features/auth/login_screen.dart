@@ -1,12 +1,103 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'providers/ward_select_providers.dart' as ws;
-import '../dashboard/providers/ward_providers.dart'as dp;
-import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import 'providers/ward_select_providers.dart' as ws;
 
+
+
+
+/// Login API
+
+class LoginResult {
+  final bool ok;
+  final int? hospitalCode;
+  final String message;
+
+  const LoginResult({
+    required this.ok,
+    required this.message,
+    this.hospitalCode,
+  });
+}
+
+class _LoginApi {
+  static String get baseUrl {
+    // 필요 시 Android Emulator:
+    // return kIsWeb ? 'http://localhost:3000' : 'http://10.0.2.2:3000';
+    return kIsWeb ? 'http://localhost:3000' : 'http://localhost:3000';
+  }
+
+  static Future<LoginResult> login({
+    required String hospitalId,
+    required String hospitalPassword,
+  }) async {
+    final uri = Uri.parse('$baseUrl/api/auth/login');
+
+    final res = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'hospital_id': hospitalId,
+        'hospital_password': hospitalPassword,
+      }),
+    );
+
+    debugPrint('[LOGIN] status=${res.statusCode}');
+    debugPrint('[LOGIN] body=${res.body}');
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      return LoginResult(ok: false, message: '로그인 실패(HTTP ${res.statusCode})');
+    }
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(res.body);
+    } catch (_) {
+      return const LoginResult(ok: false, message: '서버 응답(JSON) 파싱 실패');
+    }
+
+    if (decoded is! Map) {
+      return const LoginResult(ok: false, message: '서버 응답 형식이 올바르지 않습니다.');
+    }
+
+    final ok = decoded['code'] == 1;
+
+    // 실패/성공 공통으로 message 안전 추출
+    String message = '로그인 실패';
+    final dynamic dataAny = decoded['data'];
+    if (dataAny is Map && dataAny['message'] != null) {
+      message = dataAny['message'].toString();
+    } else if (decoded['message'] != null) {
+      message = decoded['message'].toString();
+    }
+
+    if (!ok) {
+      return LoginResult(ok: false, message: message);
+    }
+
+    // 성공 케이스 hospital_code 안전 파싱
+    if (dataAny is! Map) {
+      return const LoginResult(ok: false, message: '로그인 성공 응답(data)이 비어있습니다.');
+    }
+
+    final hospitalCode = int.tryParse(dataAny['hospital_code']?.toString() ?? '');
+    if (hospitalCode == null) {
+      return const LoginResult(ok: false, message: '병원 코드(hospital_code)를 읽지 못했습니다.');
+    }
+
+    return LoginResult(ok: true, message: '로그인 성공', hospitalCode: hospitalCode);
+  }
+}
+
+
+
+
+
+
+/// Screen
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -20,8 +111,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final pwCtrl = TextEditingController();
 
   bool loading = false;
-  bool authed = false; // 로그인 성공 여부(성공 시 병동 선택 화면으로 전환)
-//true 자동 로그인 // false 로그인 해야함
+  bool authed = true;
 
   @override
   void dispose() {
@@ -30,7 +120,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _mockLogin() async {
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _login() async {
     final id = idCtrl.text.trim();
     final pw = pwCtrl.text.trim();
 
@@ -42,64 +137,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     setState(() => loading = true);
 
     try {
-      // ✅ 실행 환경에 맞게 baseUrl 수정
-      // - Web(Chrome) / Windows 데스크톱: localhost
-      // - Android Emulator: 10.0.2.2
-      final baseUrl = kIsWeb ? 'http://localhost:3000' : 'http://localhost:3000';
-      // 안드 에뮬이면 아래로:
-      // final baseUrl = 'http://10.0.2.2:3000';
+      final result = await _LoginApi.login(hospitalId: id, hospitalPassword: pw);
+      if (!mounted) return;
 
-      final uri = Uri.parse('$baseUrl/api/auth/login');
-
-      final res = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'hospital_id': id,
-          'hospital_password': pw,
-        }),
-      );
-
-      debugPrint('[LOGIN] status=${res.statusCode}');
-      debugPrint('[LOGIN] body=${res.body}');
-
-      if (res.statusCode < 200 || res.statusCode >= 300) {
+      if (!result.ok) {
         setState(() {
           loading = false;
           authed = false;
         });
-        _snack('로그인 실패(HTTP ${res.statusCode})');
+        _snack(result.message);
         return;
       }
 
-      final decoded = jsonDecode(res.body);
-      final ok = (decoded is Map) && (decoded['code'] == 1);
-      final data = decoded['data'] as Map<String, dynamic>;
+      // 로그인 성공 → hospital_code 저장 → 병동 목록 트리거
+      ref.read(ws.hospitalCodeProvider.notifier).state = result.hospitalCode;
 
-      if (ok) {
-        final data = (decoded as Map<String, dynamic>)['data'] as Map<String, dynamic>;
-        final hospitalCode = int.parse(data['hospital_code'].toString());
-
-        // ✅ 여기! 로그인 성공하면 hospital_code 저장 (병동 목록 호출 트리거)
-        ref.read(ws.hospitalCodeProvider.notifier).state = hospitalCode;
-
-        // (선택) 병동 목록 강제 새로고침
-        ref.invalidate(ws.wardListProvider);
-      }
+      // 병동 목록 새로고침(선택)
+      ref.invalidate(ws.wardListProvider);
 
       setState(() {
         loading = false;
-        authed = ok;
+        authed = true;
       });
-
-      if (!ok) {
-        final msg = (decoded is Map && decoded['data'] is Map)
-            ? (decoded['data']['message']?.toString() ?? '로그인 실패')
-            : '로그인 실패';
-        _snack(msg);
-      }
     } catch (e) {
       debugPrint('[LOGIN] error=$e');
+      if (!mounted) return;
+
       setState(() {
         loading = false;
         authed = false;
@@ -108,33 +171,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg)),
-    );
+  void _backToLogin() {
+    // ws/dp 모두 초기화해서 꼬임 방지
+    ref.read(ws.selectedWardProvider.notifier).state = null;
+    ref.read(ws.hospitalCodeProvider.notifier).state = null;
+
+    ref.invalidate(ws.wardListProvider);
+
+    setState(() => authed = false);
   }
-
-
-
-
-
-
-
 
   @override
   Widget build(BuildContext context) {
     final card = _AuthCard(
       title: authed ? '병동 선택' : '로그인',
       subtitle: authed ? '대시보드로 이동할 병동을 선택해 주세요.' : '계정 정보를 입력해 주세요.',
-      child: authed ? _WardButtons() : _LoginForm(onLogin: _mockLogin, loading: loading, idCtrl: idCtrl, pwCtrl: pwCtrl),
+      child: authed
+          ? const _WardButtons()
+          : _LoginForm(
+        onLogin: _login,
+        loading: loading,
+        idCtrl: idCtrl,
+        pwCtrl: pwCtrl,
+      ),
       footer: authed
           ? TextButton(
-        onPressed: () {
-          // 병동 선택 화면에서 다시 로그인 화면으로 돌아가기
-          ref.read(ws.selectedWardProvider.notifier).state = null;
-          ref.invalidate(ws.wardListProvider);
-          setState(() => authed = false);
-        },
+        onPressed: _backToLogin,
         child: const Text('다른 계정으로 로그인'),
       )
           : const Text(
@@ -152,30 +214,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
               children: [
-                // 왼쪽 타이틀 영역(스크린샷 느낌 유지)
-                Expanded(
-                  flex: 3,
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text(
-                          '병동 모니터링 시스템',
-                          style: TextStyle(fontSize: 44, fontWeight: FontWeight.w900, color: Color(0xFF111827)),
-                        ),
-                        SizedBox(height: 16),
-                        Text(
-                          '로그인 후 전체 환자 현황 및 건강 상태를 관리합니다.',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF6B7280)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // 오른쪽 카드(로그인/병동선택)
+                const Expanded(flex: 3, child: _LeftIntro()),
+                const SizedBox(width: 24),
                 Expanded(flex: 2, child: card),
               ],
             ),
@@ -186,19 +226,59 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 }
 
-class _AuthCard extends StatelessWidget {
+/// =======================================================
+/// 모든 위젯 Stateful로 통일
+/// =======================================================
+class _LeftIntro extends StatefulWidget {
+  const _LeftIntro({super.key});
+
+  @override
+  State<_LeftIntro> createState() => _LeftIntroState();
+}
+
+class _LeftIntroState extends State<_LeftIntro> {
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: const [
+          Text(
+            '병동 모니터링 시스템',
+            style: TextStyle(fontSize: 44, fontWeight: FontWeight.w900, color: Color(0xFF111827)),
+          ),
+          SizedBox(height: 16),
+          Text(
+            '로그인 후 전체 환자 현황 및 건강 상태를 관리합니다.',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF6B7280)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AuthCard extends StatefulWidget {
   final String title;
   final String subtitle;
   final Widget child;
   final Widget footer;
 
   const _AuthCard({
+    super.key,
     required this.title,
     required this.subtitle,
     required this.child,
     required this.footer,
   });
 
+  @override
+  State<_AuthCard> createState() => _AuthCardState();
+}
+
+class _AuthCardState extends State<_AuthCard> {
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -215,26 +295,29 @@ class _AuthCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF111827))),
+          Text(widget.title,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF111827))),
           const SizedBox(height: 6),
-          Text(subtitle, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          Text(widget.subtitle,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
           const SizedBox(height: 18),
-          child,
+          widget.child,
           const SizedBox(height: 14),
-          Center(child: footer),
+          Center(child: widget.footer),
         ],
       ),
     );
   }
 }
 
-class _LoginForm extends StatelessWidget {
+class _LoginForm extends StatefulWidget {
   final Future<void> Function() onLogin;
   final bool loading;
   final TextEditingController idCtrl;
   final TextEditingController pwCtrl;
 
   const _LoginForm({
+    super.key,
     required this.onLogin,
     required this.loading,
     required this.idCtrl,
@@ -242,21 +325,35 @@ class _LoginForm extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    InputDecoration deco(String hint) {
-      return InputDecoration(
-        hintText: hint,
-        filled: true,
-        fillColor: const Color(0xFFF3F4F6),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF93C5FD))),
-      );
-    }
+  State<_LoginForm> createState() => _LoginFormState();
+}
 
+class _LoginFormState extends State<_LoginForm> {
+  InputDecoration _deco(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      filled: true,
+      fillColor: const Color(0xFFF3F4F6),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFF93C5FD)),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final btnStyle = ElevatedButton.styleFrom(
-      backgroundColor: const Color(0xFF65C466), // 스샷 느낌의 그린
+      backgroundColor: const Color(0xFF65C466),
       foregroundColor: Colors.white,
       minimumSize: const Size.fromHeight(48),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -269,17 +366,30 @@ class _LoginForm extends StatelessWidget {
       children: [
         const Text('ID', style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         const SizedBox(height: 8),
-        TextField(controller: idCtrl, decoration: deco('아이디를 입력'), textInputAction: TextInputAction.next),
+        TextField(
+          controller: widget.idCtrl,
+          decoration: _deco('아이디를 입력'),
+          textInputAction: TextInputAction.next,
+        ),
         const SizedBox(height: 14),
         const Text('Password', style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         const SizedBox(height: 8),
-        TextField(controller: pwCtrl, obscureText: true, decoration: deco('비밀번호를 입력'), onSubmitted: (_) => onLogin()),
+        TextField(
+          controller: widget.pwCtrl,
+          obscureText: true,
+          decoration: _deco('비밀번호를 입력'),
+          onSubmitted: (_) => widget.onLogin(),
+        ),
         const SizedBox(height: 18),
         ElevatedButton(
           style: btnStyle,
-          onPressed: loading ? null : onLogin,
-          child: loading
-              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          onPressed: widget.loading ? null : widget.onLogin,
+          child: widget.loading
+              ? const SizedBox(
+            height: 20,
+            width: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+          )
               : const Text('로그인'),
         ),
       ],
@@ -287,17 +397,23 @@ class _LoginForm extends StatelessWidget {
   }
 }
 
-
-//병동 선택 라인-------------------------------------------------------------------------------
-class _WardButtons extends ConsumerWidget {
+/// =======================================================
+/// Ward Select (ConsumerStatefulWidget로 변경)
+/// =======================================================
+class _WardButtons extends ConsumerStatefulWidget {
   const _WardButtons({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_WardButtons> createState() => _WardButtonsState();
+}
+
+class _WardButtonsState extends ConsumerState<_WardButtons> {
+  @override
+  Widget build(BuildContext context) {
     final asyncWards = ref.watch(ws.wardListProvider);
 
     final btnStyle = ElevatedButton.styleFrom(
-      backgroundColor: const Color(0xFF65C466), // 로그인 버튼과 동일 톤
+      backgroundColor: const Color(0xFF65C466),
       foregroundColor: Colors.white,
       minimumSize: const Size.fromHeight(48),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -305,7 +421,6 @@ class _WardButtons extends ConsumerWidget {
       elevation: 0,
     );
 
-    // ✅ "추가" 버튼은 살짝 구분되는 스타일(테두리형) 추천
     final addBtnStyle = OutlinedButton.styleFrom(
       foregroundColor: const Color(0xFF65C466),
       side: const BorderSide(color: Color(0xFF65C466), width: 1.2),
@@ -347,18 +462,14 @@ class _WardButtons extends ConsumerWidget {
                 ElevatedButton(
                   style: btnStyle,
                   onPressed: () {
-                    ref.read(dp.selectedWardProvider.notifier).state = w;
-
-                    GoRouter.of(context).go('/dashboard'); // 선택된 병동은 provider로 전달
+                    ref.read(ws.selectedWardProvider.notifier).state = w;
+                    GoRouter.of(context).go('/dashboard');
                   },
                   child: Text(w.categoryName),
                 ),
                 const SizedBox(height: 10),
               ],
-
             const SizedBox(height: 6),
-
-            /// ✅ 병동 추가 버튼
             OutlinedButton.icon(
               style: addBtnStyle,
               icon: const Icon(Icons.add),
@@ -368,10 +479,9 @@ class _WardButtons extends ConsumerWidget {
                 if (name == null) return;
 
                 try {
-                  // ✅ hospitalCode 가져오기 (있으면 provider 사용 / 없으면 1로 임시)
-                  // final hospitalCode = ref.read(hospitalCodeProvider);
                   final hospitalCode = ref.read(ws.hospitalCodeProvider);
                   if (hospitalCode == null) {
+                    if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('병원 코드가 없습니다. 다시 로그인해 주세요.')),
                     );
@@ -383,16 +493,15 @@ class _WardButtons extends ConsumerWidget {
                     categoryName: name,
                   );
 
-                  // ✅ 목록 다시 로드
                   ref.invalidate(ws.wardListProvider);
 
-                  if (context.mounted) {
+                  if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('병동이 추가되었습니다: $name')),
                     );
                   }
                 } catch (e) {
-                  if (context.mounted) {
+                  if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('병동 추가 실패: $e')),
                     );
@@ -400,9 +509,7 @@ class _WardButtons extends ConsumerWidget {
                 }
               },
             ),
-
             const SizedBox(height: 10),
-
             const Text(
               '※ 병동 목록은 (추후) DB/백엔드에서 받아 자동 생성됩니다.',
               style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12, fontWeight: FontWeight.w700),
@@ -414,110 +521,91 @@ class _WardButtons extends ConsumerWidget {
     );
   }
 
+
+
+  //병동 추가 라인
   Future<String?> _showAddWardDialog(BuildContext context) async {
     final ctrl = TextEditingController();
 
-    const green = Color(0xFF16A34A); // 포인트 그린(원하시면 앱에서 쓰는 그린으로 교체)
-    const border = Color(0xFFE5E7EB); // 연한 그레이
-    const text = Color(0xFF111827); // 거의 블랙
+    const green = Color(0xFF16A34A);
+    const border = Color(0xFFE5E7EB);
+    const text = Color(0xFF111827);
     const subText = Color(0xFF6B7280);
 
     return showDialog<String?>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) =>
-          AlertDialog(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.white,
-            // M3 틴트 제거(톤 안정)
-            elevation: 0,
-            insetPadding: const EdgeInsets.symmetric(
-                horizontal: 20, vertical: 24),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-              side: const BorderSide(color: border),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: border),
+        ),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+        contentPadding: const EdgeInsets.fromLTRB(20, 6, 20, 2),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+        title: const Text(
+          '병동 추가',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: text),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          cursorColor: green,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: text),
+          decoration: InputDecoration(
+            hintText: '예) 3병동, 중환자실, VIP실',
+            hintStyle: const TextStyle(color: subText, fontWeight: FontWeight.w600),
+            isDense: true,
+            filled: true,
+            fillColor: const Color(0xFFF9FAFB),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: border),
             ),
-            titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-            contentPadding: const EdgeInsets.fromLTRB(20, 6, 20, 2),
-            actionsPadding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-
-            title: const Text(
-              '병동 추가',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                color: text,
-              ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: green, width: 1.6),
             ),
-
-            content: TextField(
-              controller: ctrl,
-              autofocus: true,
-              cursorColor: green,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: text,
-              ),
-              decoration: InputDecoration(
-                hintText: '예) 3병동, 중환자실, VIP실',
-                hintStyle: const TextStyle(
-                  color: subText,
-                  fontWeight: FontWeight.w600,
-                ),
-                isDense: true,
-                filled: true,
-                fillColor: const Color(0xFFF9FAFB),
-                // 아주 연한 회색(화이트 톤 유지)
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 12),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: green, width: 1.6),
-                ),
-              ),
-              onSubmitted: (_) {
-                final v = ctrl.text.trim();
-                if (v.isEmpty) return;
-                Navigator.pop(ctx, v);
-              },
-            ),
-
-            actions: [
-              TextButton(
-                style: TextButton.styleFrom(
-                  foregroundColor: subText,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('취소'),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: green,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                onPressed: () {
-                  final v = ctrl.text.trim();
-                  if (v.isEmpty) return;
-                  Navigator.pop(ctx, v);
-                },
-                child: const Text('추가'),
-              ),
-            ],
           ),
+          onSubmitted: (_) {
+            final v = ctrl.text.trim();
+            if (v.isEmpty) return;
+            Navigator.pop(ctx, v);
+          },
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: subText,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              textStyle: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: green,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.isEmpty) return;
+              Navigator.pop(ctx, v);
+            },
+            child: const Text('추가'),
+          ),
+        ],
+      ),
     );
   }
 }
