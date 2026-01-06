@@ -6,7 +6,6 @@ abstract class WardRepository {
   Future<Ward> createWard({
     required int hospitalCode,
     required String categoryName,
-    int? sortOrder,
   });
 
   // ✅ 추가: 병동 이름 수정

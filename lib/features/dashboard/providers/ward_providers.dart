@@ -5,22 +5,28 @@ import '../../../domain/models/room.dart';
 import '../../../domain/models/patient_realtime.dart';
 import '../../../domain/models/ward.dart';
 import '../../../data/ward_repository.dart';
-import '../../../data/mock/mock_ward_repository.dart';
+import '../../../api/services/auth_api.dart';
+import '../../../app/providers/core_providers.dart';
+import '../../auth/providers/ward_select_providers.dart';
+import '../../../api/services/hospital_structure_service.dart';
+import '../../../data/dio_ward_repository.dart';
 
 
-/// ✅ 현재 선택된 병동(병동 선택 화면에서 탭하면 여기에 저장)
+/// ✅ 현재 선택된 병동
 final selectedWardProvider = StateProvider<Ward?>((ref) => null);
 
-/// ✅ (추가) 로그인/설정 등에서 병원 코드(hospitalCode)를 세팅해둘 곳
-/// - 지금은 기본 1로 둠
-/// - 백엔드 붙이면 로그인 응답에서 hospitalCode 내려오면 여기 state 세팅하면 됩니다.
-final hospitalCodeProvider = StateProvider<int>((ref) => 1);
+/// ✅ 병원 코드: 로그인 성공 후 세팅(권장: nullable)
+final hospitalCodeProvider = StateProvider<int?>((ref) => null);
 
-/// ✅ (추가) 병동 API/Mock 레포지토리
-/// - 나중에 DioWardRepository로 갈아끼우면 UI/Provider는 그대로 사용 가능
+/// ✅ WardRepository: Mock ↔ Dio 스위치
 final wardRepositoryProvider = Provider<WardRepository>((ref) {
-  return MockWardRepository();
-});
+    final client = ref.watch(apiClientProvider); // ✅ 이걸로 박으세요
+    final svc = HospitalStructureService(client);
+    return DioWardRepository(svc);
+  });
+
+
+
 
 /// ✅ (추가) 병동 목록 로드 + 병동 추가까지 담당하는 Notifier(Family: hospitalCode별)
 class WardListNotifier extends AutoDisposeFamilyAsyncNotifier<List<Ward>, int> {
@@ -47,7 +53,6 @@ class WardListNotifier extends AutoDisposeFamilyAsyncNotifier<List<Ward>, int> {
     await repo.createWard(
       hospitalCode: hospitalCode,
       categoryName: name,
-      sortOrder: sortOrder,
     );
 
     // 목록 새로고침(동기화 안정적)

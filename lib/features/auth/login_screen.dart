@@ -49,7 +49,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       // 안드 에뮬이면 아래로:
       // final baseUrl = 'http://10.0.2.2:3000';
 
-      final uri = Uri.parse('$baseUrl/auth/login');
+      final uri = Uri.parse('$baseUrl/api/auth/login');
 
       final res = await http.post(
         uri,
@@ -378,12 +378,6 @@ class _WardButtons extends ConsumerWidget {
                     return;
                   }
 
-                  await ref.read(ws.wardRepositoryProvider).createWard(
-                    hospitalCode: hospitalCode,
-                    categoryName: name,
-                  );
-
-                  // ✅ 백엔드 연동 대비: Repository의 createWard 호출
                   await ref.read(ws.wardRepositoryProvider).createWard(
                     hospitalCode: hospitalCode,
                     categoryName: name,
