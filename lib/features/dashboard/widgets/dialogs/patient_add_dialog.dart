@@ -1,19 +1,31 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../domain/models/patient.dart';
-import '../../providers/ward_providers.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
 
-class PatientAddDialog extends ConsumerStatefulWidget {
-  final int? prefillRoomNo;
-  final int? prefillBedNo;
+import 'package:medicalapp/urlConfig.dart';
+import 'package:medicalapp/storage_keys.dart';
 
-  const PatientAddDialog({super.key, this.prefillRoomNo, this.prefillBedNo});
+class PatientAddDialog extends StatefulWidget {
+  final int? prefillBedCode;      // ✅ 침대 hospital_st_code (bed_code)
+  final String? prefillRoomLabel; // "101호" (표시용)
+  final String? prefillBedLabel;  // "Bed-1" (표시용)
+
+  const PatientAddDialog({
+    super.key,
+    this.prefillBedCode,
+    this.prefillRoomLabel,
+    this.prefillBedLabel,
+  });
 
   @override
-  ConsumerState<PatientAddDialog> createState() => _PatientAddDialogState();
+  State<PatientAddDialog> createState() => _PatientAddDialogState();
 }
 
-class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
+class _PatientAddDialogState extends State<PatientAddDialog> {
+  static const _storage = FlutterSecureStorage();
+
   // 기본정보
   final nameCtrl = TextEditingController();
   final ageCtrl = TextEditingController();
@@ -21,30 +33,121 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
   String gender = '남';
   DateTime? birthDate;
 
-  // 병실 배정
-  late int floor;
-  late String ward;
-  int? roomNo;
-  int bedNo = 1;
-
   // 진료정보
   final diagnosisCtrl = TextEditingController();
-  final physicianCtrl = TextEditingController();
+  final doctorCtrl = TextEditingController();
   final nurseCtrl = TextEditingController();
   final allergyCtrl = TextEditingController();
-  final noteCtrl = TextEditingController();
+  final significantCtrl = TextEditingController(); // ✅ 명세 significant
 
-  RiskStatus status = RiskStatus.stable;
+  bool loadingBeds = true;
+  bool saving = false;
+
+  int? floorStCode; // 선택된 층 hospital_st_code (스토리지에서)
+  List<_BedOption> bedOptions = [];
+  int? selectedBedCode;
 
   @override
   void initState() {
     super.initState();
-    floor = ref.read(selectedFloorProvider);
-    ward = '${floor}층 병동';
+    _initBeds();
+  }
 
-    final rooms = ref.read(roomsProvider);
-    roomNo = widget.prefillRoomNo ?? (rooms.isNotEmpty ? rooms.first.roomNo : null);
-    bedNo = widget.prefillBedNo ?? 1;
+  Future<void> _initBeds() async {
+    setState(() => loadingBeds = true);
+
+    // 1) 현재 선택된 층 코드(= floor hospital_st_code) 읽기
+    final stStr = await _storage.read(key: StorageKeys.selectedFloorStCode);
+    floorStCode = int.tryParse((stStr ?? '').trim());
+
+    if (floorStCode == null) {
+      // 층 선택이 안 되어있으면 빈 상태
+      bedOptions = [];
+      selectedBedCode = null;
+      setState(() => loadingBeds = false);
+      return;
+    }
+
+    // 2) 구조 API에서 rooms/beds 읽어서 "빈 침대"만 옵션으로 만들기
+    try {
+      final base = Urlconfig.serverUrl;
+      final uri = Uri.parse('$base/api/hospital/structure?hospital_st_code=$floorStCode');
+
+      final res = await http.get(uri, headers: {'Content-Type': 'application/json'});
+      final decoded = jsonDecode(res.body);
+
+      if (decoded is! Map<String, dynamic> || decoded['code'] != 1) {
+        bedOptions = [];
+        selectedBedCode = null;
+        setState(() => loadingBeds = false);
+        return;
+      }
+
+      final data = decoded['data'];
+      final roomsAny = (data is Map<String, dynamic>) ? data['rooms'] : null;
+      final rooms = (roomsAny is List) ? roomsAny : const [];
+
+      final opts = <_BedOption>[];
+
+      for (final rAny in rooms) {
+        if (rAny is! Map) continue;
+        final r = Map<String, dynamic>.from(rAny);
+
+        final roomLabel = (r['category_name']?.toString() ?? '').trim(); // "101호"
+        final bedsAny = r['beds'];
+        final beds = (bedsAny is List) ? bedsAny : const [];
+
+        for (final bAny in beds) {
+          if (bAny is! Map) continue;
+          final b = Map<String, dynamic>.from(bAny);
+
+          final bedCode = int.tryParse(b['hospital_st_code']?.toString() ?? '');
+          if (bedCode == null) continue;
+
+          final bedLabel = (b['category_name']?.toString() ?? '').trim(); // "Bed-1"
+
+          // patient가 있으면 점유(추가 불가)
+          final hasPatient = b['patient'] is Map;
+
+          if (!hasPatient) {
+            opts.add(_BedOption(
+              bedCode: bedCode,
+              roomLabel: roomLabel,
+              bedLabel: bedLabel,
+            ));
+          }
+        }
+      }
+
+      // 정렬(방/침대 숫자 기준)
+      opts.sort((a, b) {
+        final ar = _digits(a.roomLabel);
+        final br = _digits(b.roomLabel);
+        if (ar != br) return ar.compareTo(br);
+        final ab = _digits(a.bedLabel);
+        final bb = _digits(b.bedLabel);
+        return ab.compareTo(bb);
+      });
+
+      bedOptions = opts;
+
+      // prefillBedCode가 있으면 우선 선택
+      if (widget.prefillBedCode != null && opts.any((e) => e.bedCode == widget.prefillBedCode)) {
+        selectedBedCode = widget.prefillBedCode;
+      } else {
+        selectedBedCode = opts.isNotEmpty ? opts.first.bedCode : null;
+      }
+    } catch (_) {
+      bedOptions = [];
+      selectedBedCode = null;
+    }
+
+    setState(() => loadingBeds = false);
+  }
+
+  int _digits(String s) {
+    final m = RegExp(r'\d+').firstMatch(s);
+    return int.tryParse(m?.group(0) ?? '') ?? 0;
   }
 
   @override
@@ -53,22 +156,100 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
     ageCtrl.dispose();
     birthCtrl.dispose();
     diagnosisCtrl.dispose();
-    physicianCtrl.dispose();
+    doctorCtrl.dispose();
     nurseCtrl.dispose();
     allergyCtrl.dispose();
-    noteCtrl.dispose();
+    significantCtrl.dispose();
     super.dispose();
   }
 
+  Future<void> _save() async {
+    final name = nameCtrl.text.trim();
+    final age = int.tryParse(ageCtrl.text.trim());
+    final diag = diagnosisCtrl.text.trim();
+    final doctor = doctorCtrl.text.trim();
+    final nurse = nurseCtrl.text.trim();
+    final allergy = allergyCtrl.text.trim();
+    final significant = significantCtrl.text.trim();
+    final bedCode = selectedBedCode;
+
+    if (name.isEmpty || age == null || birthDate == null || diag.isEmpty || doctor.isEmpty || significant.isEmpty) {
+      _snack('필수 항목(환자명/나이/생년월일/진단명/주치의/특이사항)을 확인해 주세요.');
+      return;
+    }
+    if (bedCode == null) {
+      _snack('배정할 침대를 선택할 수 없습니다. (빈 침대 없음/층 선택 필요)');
+      return;
+    }
+
+    // 명세 birth_date 예: "890214" 형태로 맞춤(YYMMDD)
+    final yy = (birthDate!.year % 100).toString().padLeft(2, '0');
+    final mm = birthDate!.month.toString().padLeft(2, '0');
+    final dd = birthDate!.day.toString().padLeft(2, '0');
+    final birthYyMmDd = '$yy$mm$dd';
+
+    final genderInt = (gender == '남') ? 0 : 1;
+
+    setState(() => saving = true);
+
+    try {
+      final base = Urlconfig.serverUrl;
+      final uri = Uri.parse('$base/api/patient/profile');
+
+      final token = await _storage.read(key: 'access_token'); //토큰
+
+      final res = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          "patient_name": name,
+          "gender": genderInt,
+          "age": age,
+          "birth_date": birthYyMmDd,
+          "bed_code": bedCode,
+          "nurse": nurse,
+          "doctor": doctor,
+          "diagnosis": diag,
+          "allergy": allergy,
+          "significant": significant,
+        }),
+      );
+
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic> || decoded['code'] != 1) {
+        _snack('환자 추가 실패');
+        setState(() => saving = false);
+        return;
+      }
+
+      // ✅ 성공 → 호출한 쪽에서 재호출(loadData) 할 수 있게 true 반환
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (e) {
+      _snack('요청 실패: $e');
+      setState(() => saving = false);
+    }
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+
   @override
   Widget build(BuildContext context) {
-    final floors = ref.watch(floorsProvider);
-    final rooms = ref.watch(roomsProvider);
+    const border = Color(0xFFE5E7EB);
+    const text = Color(0xFF111827);
+    const subText = Color(0xFF6B7280);
+    const green = Color(0xFF22C55E);
 
-    // 병실 드롭다운 안전값
-    final roomItems = rooms.map((r) => r.roomNo).toList();
-    if (roomNo == null && roomItems.isNotEmpty) roomNo = roomItems.first;
-    if (roomNo != null && roomItems.isNotEmpty && !roomItems.contains(roomNo)) roomNo = roomItems.first;
+    final bedDropdownItems = bedOptions
+        .map((e) => DropdownMenuItem<int>(
+      value: e.bedCode,
+      child: Text('${e.roomLabel} · ${e.bedLabel}', style: const TextStyle(fontWeight: FontWeight.w800)),
+    ))
+        .toList();
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -78,7 +259,7 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          border: Border.all(color: border),
           boxShadow: const [
             BoxShadow(color: Color(0x14000000), blurRadius: 16, offset: Offset(0, 8)),
           ],
@@ -91,11 +272,11 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
               padding: const EdgeInsets.fromLTRB(22, 18, 18, 12),
               child: Row(
                 children: const [
-                  Text('환자 추가', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                  Text('환자 추가', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: text)),
                 ],
               ),
             ),
-            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            const Divider(height: 1, color: border),
 
             // 내용(스크롤)
             Flexible(
@@ -147,60 +328,31 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
                     const SizedBox(height: 14),
 
                     _Section(
-                      title: '병실 배정',
+                      title: '침대 배정',
                       child: Column(
                         children: [
-                          _Row2(
-                            left: _Dropdown<int>(
-                              label: '층수',
-                              value: floor,
-                              items: floors,
-                              onChanged: (v) {
-                                // 층수 변경 시 병동도 함께 변경(동기화)
-                                ref.read(selectedFloorProvider.notifier).state = v;
-                                setState(() {
-                                  floor = v;
-                                  ward = '${v}층 병동';
-                                  final newRooms = ref.read(roomsProvider);
-                                  roomNo = newRooms.isNotEmpty ? newRooms.first.roomNo : null;
-                                  bedNo = 1;
-                                });
-                              },
-                            ),
-                            right: _Dropdown<String>(
-                              label: '병동',
-                              value: ward,
-                              items: floors.map((f) => '${f}층 병동').toList(),
-                              onChanged: (v) {
-                                // 병동 변경 시 층수도 동기화
-                                final parsed = int.tryParse(v.replaceAll('층 병동', ''));
-                                if (parsed == null) return;
-                                ref.read(selectedFloorProvider.notifier).state = parsed;
-                                setState(() {
-                                  ward = v;
-                                  floor = parsed;
-                                  final newRooms = ref.read(roomsProvider);
-                                  roomNo = newRooms.isNotEmpty ? newRooms.first.roomNo : null;
-                                  bedNo = 1;
-                                });
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          _Row2(
-                            left: _Dropdown<int>(
-                              label: '호실',
-                              value: roomNo ?? (roomItems.isNotEmpty ? roomItems.first : 0),
-                              items: roomItems.isNotEmpty ? roomItems : [0],
-                              onChanged: (v) => setState(() => roomNo = v),
-                            ),
-                            right: _Dropdown<int>(
-                              label: '침대',
-                              value: bedNo,
-                              items: List.generate(8, (i) => i + 1),
-                              onChanged: (v) => setState(() => bedNo = v),
-                            ),
-                          ),
+                          if (floorStCode == null)
+                            const Text(
+                              '선택된 층이 없습니다. (층 선택 후 다시 시도)',
+                              style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800),
+                            )
+                          else if (loadingBeds)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 10),
+                              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                            )
+                          else if (bedOptions.isEmpty)
+                              const Text(
+                                '빈 침대가 없습니다.',
+                                style: TextStyle(color: subText, fontWeight: FontWeight.w800),
+                              )
+                            else
+                              DropdownButtonFormField<int>(
+                                value: selectedBedCode,
+                                items: bedDropdownItems,
+                                onChanged: (v) => setState(() => selectedBedCode = v),
+                                decoration: _inputDeco(),
+                              ),
                         ],
                       ),
                     ),
@@ -212,7 +364,7 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
                         children: [
                           _Row2(
                             left: _TextField(label: '진단명', controller: diagnosisCtrl, requiredMark: true),
-                            right: _TextField(label: '주치의', controller: physicianCtrl, requiredMark: true),
+                            right: _TextField(label: '주치의', controller: doctorCtrl, requiredMark: true),
                           ),
                           const SizedBox(height: 12),
                           _Row2(
@@ -220,7 +372,7 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
                             right: _TextField(label: '알레르기', controller: allergyCtrl),
                           ),
                           const SizedBox(height: 12),
-                          _TextArea(label: '특이사항', controller: noteCtrl),
+                          _TextArea(label: '특이사항(필수)', controller: significantCtrl, requiredMark: true),
                         ],
                       ),
                     ),
@@ -229,75 +381,40 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
               ),
             ),
 
-            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            const Divider(height: 1, color: border),
 
             // 하단 버튼
             Padding(
               padding: const EdgeInsets.fromLTRB(22, 14, 22, 16),
               child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end, // ✅ 왼쪽
                 children: [
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF374151),
-                      side: const BorderSide(color: Color(0xFFE5E7EB)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                    ),
-                    onPressed: () {
-                      final name = nameCtrl.text.trim();
-                      final age = int.tryParse(ageCtrl.text.trim());
-                      final diag = diagnosisCtrl.text.trim();
-                      final doc = physicianCtrl.text.trim();
-
-                      if (name.isEmpty || age == null || gender.isEmpty || birthDate == null || diag.isEmpty || doc.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('필수 항목(환자명/나이/성별/생년월일/진단명/주치의)을 확인해 주세요.')),
-                        );
-                        return;
-                      }
-                      if (roomNo == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('호실 정보를 확인해 주세요.')),
-                        );
-                        return;
-                      }
-
-                      final id = DateTime.now().millisecondsSinceEpoch.toString();
-
-                      ref.read(patientListProvider.notifier).add(
-                        Patient(
-                          id: id,
-                          name: name,
-                          age: age,
-                          gender: gender,
-                          birthDate: birthDate!,
-                          ward: ward,
-                          floor: floor,
-                          roomNo: roomNo!,
-                          bedNo: bedNo,
-                          diagnosis: diag,
-                          physician: doc,
-                          nurse: nurseCtrl.text.trim(),
-                          allergy: allergyCtrl.text.trim(),
-                          note: noteCtrl.text.trim(),
-                          status: RiskStatus.stable,
-                        ),
-                      );
-
-                      Navigator.pop(context);
-                    },
-                    child: const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ),
-                  const Spacer(),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF22C55E),
+                      backgroundColor: green,
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
                     ),
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: saving ? null : _save,
+                    child: saving
+                        ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                        : const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+                  const SizedBox(width: 10),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF374151),
+                      side: const BorderSide(color: border),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    ),
+                    onPressed: saving ? null : () => Navigator.pop(context, false),
                     child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.w900)),
                   ),
                 ],
@@ -308,6 +425,18 @@ class _PatientAddDialogState extends ConsumerState<PatientAddDialog> {
       ),
     );
   }
+}
+
+class _BedOption {
+  final int bedCode;
+  final String roomLabel;
+  final String bedLabel;
+
+  const _BedOption({
+    required this.bedCode,
+    required this.roomLabel,
+    required this.bedLabel,
+  });
 }
 
 /* ------------------ 스타일 위젯(대시보드 톤) ------------------ */
@@ -387,13 +516,19 @@ class _TextField extends StatelessWidget {
 class _TextArea extends StatelessWidget {
   final String label;
   final TextEditingController controller;
+  final bool requiredMark;
 
-  const _TextArea({required this.label, required this.controller});
+  const _TextArea({
+    required this.label,
+    required this.controller,
+    this.requiredMark = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return _FieldShell(
       label: label,
+      requiredMark: requiredMark,
       child: TextField(
         controller: controller,
         minLines: 3,
@@ -440,7 +575,6 @@ class _Dropdown<T> extends StatelessWidget {
   final String label;
   final T value;
   final List<T> items;
-  final String Function(T v)? itemLabel;
   final void Function(T v) onChanged;
   final bool requiredMark;
 
@@ -449,7 +583,6 @@ class _Dropdown<T> extends StatelessWidget {
     required this.value,
     required this.items,
     required this.onChanged,
-    this.itemLabel,
     this.requiredMark = false,
   });
 
@@ -464,7 +597,7 @@ class _Dropdown<T> extends StatelessWidget {
           for (final it in items)
             DropdownMenuItem(
               value: it,
-              child: Text(itemLabel?.call(it) ?? it.toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
+              child: Text(it.toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
             ),
         ],
         onChanged: (v) {

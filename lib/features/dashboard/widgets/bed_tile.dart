@@ -1,10 +1,26 @@
 import 'package:flutter/material.dart';
-import '../../../domain/models/patient.dart';
-import 'patient_list_card.dart';
+import 'patient_list_card.dart'; // RiskStatus / statusColor / riskFromWarningInt 재사용
 
-class BedTile extends StatefulWidget {
+/// ✅ /api/hospital/structure (beds[].patient) 에 맞춘 침대의 환자 요약
+class BedPatientItem {
+  final int patientCode;
+  final String patientName;
+  final int patientAge;
+  final int patientWarning; // 0/1/2
+
+  const BedPatientItem({
+    required this.patientCode,
+    required this.patientName,
+    required this.patientAge,
+    required this.patientWarning,
+  });
+
+  RiskStatus get status => riskFromWarningInt(patientWarning);
+}
+
+class BedTile extends StatelessWidget {
   final int bedNo;
-  final Patient? patient;
+  final BedPatientItem? patient;
   final VoidCallback? onTap;
 
   const BedTile({
@@ -15,24 +31,13 @@ class BedTile extends StatefulWidget {
   });
 
   @override
-  State<BedTile> createState() => _BedTileState();
-}
-
-class _BedTileState extends State<BedTile> {
-  @override
   Widget build(BuildContext context) {
-    final has = widget.patient != null;
+    final has = patient != null;
 
-    Color border = const Color(0xFFD1D5DB);
-    Color bg = Colors.white;
-    bool showDangerBadge = false;
-
-    if (has) {
-      final c = statusColor(widget.patient!.status);
-      border = c;
-      bg = c.withOpacity(0.06);
-      showDangerBadge = widget.patient!.status == RiskStatus.danger;
-    }
+    final RiskStatus? status = has ? patient!.status : null;
+    final Color border = has ? statusColor(status!) : const Color(0xFFD1D5DB);
+    final Color bg = has ? statusColor(status!).withOpacity(0.06) : Colors.white;
+    final bool showDangerBadge = has && status == RiskStatus.danger;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -40,8 +45,6 @@ class _BedTileState extends State<BedTile> {
 
         final pad = isCompact ? 8.0 : 12.0;
         final iconSize = isCompact ? 28.0 : 34.0;
-        final gap1 = isCompact ? 6.0 : 8.0;
-        final gap2 = isCompact ? 6.0 : 8.0;
 
         final bedTextStyle = TextStyle(
           color: const Color(0xFF6B7280),
@@ -63,7 +66,7 @@ class _BedTileState extends State<BedTile> {
         );
 
         return InkWell(
-          onTap: widget.onTap,
+          onTap: onTap,
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: EdgeInsets.all(pad),
@@ -90,11 +93,8 @@ class _BedTileState extends State<BedTile> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
-                            Icons.warning_amber_rounded,
-                            size: isCompact ? 12 : 14,
-                            color: Colors.white,
-                          ),
+                          Icon(Icons.warning_amber_rounded,
+                              size: isCompact ? 12 : 14, color: Colors.white),
                           const SizedBox(width: 4),
                           Text(
                             '위험',
@@ -113,16 +113,15 @@ class _BedTileState extends State<BedTile> {
                 Column(
                   children: [
                     const Spacer(),
-
                     Icon(Icons.bed_outlined, size: iconSize, color: const Color(0xFF6B7280)),
-                    SizedBox(height: gap1),
+                    SizedBox(height: isCompact ? 6 : 8),
 
                     FittedBox(
                       fit: BoxFit.scaleDown,
-                      child: Text('침대 ${widget.bedNo}', style: bedTextStyle),
+                      child: Text('침대 $bedNo', style: bedTextStyle),
                     ),
 
-                    SizedBox(height: gap2),
+                    SizedBox(height: isCompact ? 6 : 8),
 
                     if (has) ...[
                       Icon(Icons.person_outline, size: isCompact ? 14 : 16, color: const Color(0xFF6B7280)),
@@ -131,7 +130,7 @@ class _BedTileState extends State<BedTile> {
                       SizedBox(
                         width: double.infinity,
                         child: Text(
-                          widget.patient!.name,
+                          patient!.patientName,
                           textAlign: TextAlign.center,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -142,7 +141,7 @@ class _BedTileState extends State<BedTile> {
                       SizedBox(height: isCompact ? 2 : 4),
 
                       Text(
-                        '${widget.patient!.age}세',
+                        '${patient!.patientAge}세',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: ageStyle,

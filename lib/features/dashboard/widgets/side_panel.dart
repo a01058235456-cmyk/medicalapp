@@ -1,22 +1,53 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart'; // ✅ 추가 (go_router 쓰는 경우)
+import 'dart:convert';
 
-import '../providers/ward_providers.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
+
+import 'package:medicalapp/urlConfig.dart';
+import 'package:medicalapp/storage_keys.dart';
+
 import 'patient_list_card.dart';
 import 'dialogs/patient_add_dialog.dart';
-import 'dialogs/patient_edit_dialog.dart';
 import 'side_panel_action_button.dart';
 
-class SidePanel extends ConsumerStatefulWidget {
+enum PatientTab { all, danger, warning, stable }
+
+class SidePanel extends StatefulWidget {
   const SidePanel({super.key});
 
   @override
-  ConsumerState<SidePanel> createState() => _SidePanelState();
+  State<SidePanel> createState() => _SidePanelState();
 }
 
-class _SidePanelState extends ConsumerState<SidePanel> {
+class _SidePanelState extends State<SidePanel> {
+  static const _storage = FlutterSecureStorage();
+
+
+
   final ScrollController _scrollCtrl = ScrollController();
+
+  late final String _front_url;
+
+  bool _isLoading = true;
+
+  // ✅ 현재 선택된 층(스토리지에서 읽음)
+  int? selectedFloorStCode;
+
+  // ✅ 층별 환자 목록(명세2)
+  List<FloorPatientItem> _allPatients = [];
+
+  // ✅ UI 상태(Provider 대신 State)
+  PatientTab _tab = PatientTab.all;
+  int? _selectedPatientCode;
+
+  @override
+  void initState() {
+    super.initState();
+    _front_url = Urlconfig.serverUrl.toString();
+    loadData();
+  }
 
   @override
   void dispose() {
@@ -24,10 +55,103 @@ class _SidePanelState extends ConsumerState<SidePanel> {
     super.dispose();
   }
 
+  Future<void> loadData() async {
+    setState(() => _isLoading = true);
+    await getData();
+    setState(() => _isLoading = false);
+  }
+
+  /// ✅ storage + http로 층별 환자 목록 가져오기 (명세2)
+  Future<void> getData() async {
+    // 1) 선택 층 코드 읽기
+    final floorStCodeStr = await _storage.read(key: StorageKeys.selectedFloorStCode);
+    final floorStCode = int.tryParse((floorStCodeStr ?? '').trim());
+    selectedFloorStCode = floorStCode;
+
+    if (floorStCode == null) {
+      // 층 선택이 아직 없으면 빈 목록
+      _allPatients = [];
+      return;
+    }
+
+    // 2) 층별 환자 목록 조회
+    try {
+      final uri = Uri.parse('$_front_url/api/hospital/structure/patient-list?hospital_st_code=$floorStCode');
+      final res = await http.get(uri, headers: {'Content-Type': 'application/json'});
+
+      debugPrint('[PATIENT_LIST] status=${res.statusCode}');
+      debugPrint('[PATIENT_LIST] body=${res.body}');
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _allPatients = [];
+        return;
+      }
+
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic>) {
+        _allPatients = [];
+        return;
+      }
+
+      if (decoded['code'] != 1) {
+        _allPatients = [];
+        return;
+      }
+
+      final data = decoded['data'];
+      if (data is! Map<String, dynamic>) {
+        _allPatients = [];
+        return;
+      }
+
+      final patientsAny = data['patients'];
+      final list = <FloorPatientItem>[];
+
+      if (patientsAny is List) {
+        for (final p in patientsAny) {
+          if (p is! Map) continue;
+
+          final code = int.tryParse(p['patient_code']?.toString() ?? '') ?? -1;
+          final name = (p['patient_name']?.toString() ?? '').trim();
+          final room = (p['patient_room']?.toString() ?? '').trim();
+          final bed = (p['patient_bed']?.toString() ?? '').trim();
+          final warn = int.tryParse(p['patient_warning']?.toString() ?? '') ?? 0;
+
+          if (code <= 0) continue;
+
+          list.add(FloorPatientItem(
+            patientCode: code,
+            patientName: name.isEmpty ? '이름없음' : name,
+            patientRoom: room.isEmpty ? '-' : room,
+            patientBed: bed.isEmpty ? '-' : bed,
+            patientWarning: warn,
+          ));
+        }
+      }
+
+      _allPatients = list;
+    } catch (e) {
+      debugPrint('[PATIENT_LIST] error=$e');
+      _allPatients = [];
+    }
+  }
+
+  List<FloorPatientItem> get _filteredPatients {
+    switch (_tab) {
+      case PatientTab.all:
+        return _allPatients;
+      case PatientTab.danger:
+        return _allPatients.where((p) => p.patientWarning == 2).toList();
+      case PatientTab.warning:
+        return _allPatients.where((p) => p.patientWarning == 1).toList();
+      case PatientTab.stable:
+        return _allPatients.where((p) => p.patientWarning == 0).toList();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final patients = ref.watch(sidePanelPatientsProvider);
-    final selectedId = ref.watch(selectedPatientIdProvider);
+    final patients = _filteredPatients;
 
     return Container(
       width: 300,
@@ -45,36 +169,34 @@ class _SidePanelState extends ConsumerState<SidePanel> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      '환자 목록',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-                    ),
+                    const Text('환자 목록', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                     const SizedBox(height: 6),
                     Text(
-                      '총 ${patients.length}명',
-                      style: const TextStyle(
-                        color: Color(0xFF6B7280),
-                        fontWeight: FontWeight.w700,
-                      ),
+                      '총 ${_allPatients.length}명',
+                      style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
                 const Spacer(),
+
+                // ✅ 환자 추가 버튼 유지
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF22C55E),
                     foregroundColor: Colors.white,
                     elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   ),
                   onPressed: () async {
-                    await showDialog(
+                    final ok = await showDialog<bool>(
                       context: context,
                       builder: (_) => const PatientAddDialog(),
                     );
+
+                    if (ok == true) {
+                      await loadData();
+                    }
                   },
                   icon: const Icon(Icons.add),
                   label: const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
@@ -83,15 +205,20 @@ class _SidePanelState extends ConsumerState<SidePanel> {
             ),
           ),
 
-          // 탭(전체/위험/주의/안정)
-          const Padding(
-            padding: EdgeInsets.fromLTRB(18, 0, 18, 14),
-            child: _Tabs(),
+          // 탭(전체/위험/주의/안전)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+            child: _Tabs(
+              tab: _tab,
+              onChanged: (t) => setState(() => _tab = t),
+            ),
           ),
 
           // 리스트 스크롤
           Expanded(
-            child: Scrollbar(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : Scrollbar(
               controller: _scrollCtrl,
               thumbVisibility: true,
               child: ListView.separated(
@@ -103,21 +230,17 @@ class _SidePanelState extends ConsumerState<SidePanel> {
                   final p = patients[i];
                   return PatientListCard(
                     patient: p,
-                    selected: selectedId == p.id,
+                    selected: _selectedPatientCode == p.patientCode,
                     onTap: () async {
-                      ref.read(selectedPatientIdProvider.notifier).state = p.id;
-                      await showDialog(
-                        context: context,
-                        builder: (_) => PatientEditDialog(patient: p),
-                      );
-                    },
+                      setState(() => _selectedPatientCode = p.patientCode);
+                      }
                   );
                 },
               ),
             ),
           ),
 
-          // ✅ 여기부터 하단 고정 버튼
+          // 하단 고정 버튼
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 18),
             child: Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -129,12 +252,16 @@ class _SidePanelState extends ConsumerState<SidePanel> {
             child: SidePanelActionButton(
               label: '병동 선택',
               icon: Icons.apartment_rounded,
-              onTap: () {
-                // ✅ go_router 사용 시 (라우트는 프로젝트에 맞게 변경)
-                context.go('/login');
+              onTap: () async{
+                final storage = FlutterSecureStorage();
+                await storage.delete(key: 'selected_ward_json');
+                await storage.delete(key: StorageKeys.selectedWardStCode);
+                await storage.delete(key: StorageKeys.selectedWardName);
+                await storage.delete(key: StorageKeys.selectedFloorStCode);
+                await storage.delete(key: StorageKeys.floorLabel);
 
-                // ✅ 만약 Navigator를 쓰고 있다면 아래로 바꾸세요
-                // Navigator.of(context).pushNamed('/ward-select');
+                if (!context.mounted) return;
+                context.go('/login');
               },
             ),
           ),
@@ -144,17 +271,18 @@ class _SidePanelState extends ConsumerState<SidePanel> {
   }
 }
 
-class _Tabs extends ConsumerWidget {
-  const _Tabs({super.key});
+class _Tabs extends StatelessWidget {
+  final PatientTab tab;
+  final ValueChanged<PatientTab> onChanged;
+
+  const _Tabs({required this.tab, required this.onChanged});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final tab = ref.watch(patientTabProvider);
-
+  Widget build(BuildContext context) {
     Widget chip(String label, PatientTab v) {
       final selected = tab == v;
       return InkWell(
-        onTap: () => ref.read(patientTabProvider.notifier).state = v,
+        onTap: () => onChanged(v),
         borderRadius: BorderRadius.circular(999),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -184,7 +312,7 @@ class _Tabs extends ConsumerWidget {
           const SizedBox(width: 8),
           chip('주의', PatientTab.warning),
           const SizedBox(width: 8),
-          chip('안정', PatientTab.stable),
+          chip('안전', PatientTab.stable),
         ],
       ),
     );

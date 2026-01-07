@@ -1,117 +1,79 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
+
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
-import 'providers/ward_select_providers.dart' as ws;
+import 'package:medicalapp/storage_keys.dart';
+import 'package:medicalapp/urlConfig.dart';
 
+/// =======================
+/// Models (간단 모델)
+/// =======================
+class WardItem {
+  final int hospitalStCode;
+  final String categoryName;
+  final int sortOrder;
 
-
-
-/// Login API
-
-class LoginResult {
-  final bool ok;
-  final int? hospitalCode;
-  final String message;
-
-  const LoginResult({
-    required this.ok,
-    required this.message,
-    this.hospitalCode,
+  const WardItem({
+    required this.hospitalStCode,
+    required this.categoryName,
+    required this.sortOrder,
   });
-}
 
-class _LoginApi {
-  static String get baseUrl {
-    // 필요 시 Android Emulator:
-    // return kIsWeb ? 'http://localhost:3000' : 'http://10.0.2.2:3000';
-    return kIsWeb ? 'http://localhost:3000' : 'http://localhost:3000';
-  }
-
-  static Future<LoginResult> login({
-    required String hospitalId,
-    required String hospitalPassword,
-  }) async {
-    final uri = Uri.parse('$baseUrl/api/auth/login');
-
-    final res = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'hospital_id': hospitalId,
-        'hospital_password': hospitalPassword,
-      }),
+  factory WardItem.fromJson(Map<String, dynamic> j) {
+    return WardItem(
+      hospitalStCode: int.tryParse(j['hospital_st_code']?.toString() ?? '') ?? 0,
+      categoryName: (j['category_name'] ?? '').toString(),
+      sortOrder: int.tryParse(j['sort_order']?.toString() ?? '') ?? 0,
     );
-
-    debugPrint('[LOGIN] status=${res.statusCode}');
-    debugPrint('[LOGIN] body=${res.body}');
-
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      return LoginResult(ok: false, message: '로그인 실패(HTTP ${res.statusCode})');
-    }
-
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(res.body);
-    } catch (_) {
-      return const LoginResult(ok: false, message: '서버 응답(JSON) 파싱 실패');
-    }
-
-    if (decoded is! Map) {
-      return const LoginResult(ok: false, message: '서버 응답 형식이 올바르지 않습니다.');
-    }
-
-    final ok = decoded['code'] == 1;
-
-    // 실패/성공 공통으로 message 안전 추출
-    String message = '로그인 실패';
-    final dynamic dataAny = decoded['data'];
-    if (dataAny is Map && dataAny['message'] != null) {
-      message = dataAny['message'].toString();
-    } else if (decoded['message'] != null) {
-      message = decoded['message'].toString();
-    }
-
-    if (!ok) {
-      return LoginResult(ok: false, message: message);
-    }
-
-    // 성공 케이스 hospital_code 안전 파싱
-    if (dataAny is! Map) {
-      return const LoginResult(ok: false, message: '로그인 성공 응답(data)이 비어있습니다.');
-    }
-
-    final hospitalCode = int.tryParse(dataAny['hospital_code']?.toString() ?? '');
-    if (hospitalCode == null) {
-      return const LoginResult(ok: false, message: '병원 코드(hospital_code)를 읽지 못했습니다.');
-    }
-
-    return LoginResult(ok: true, message: '로그인 성공', hospitalCode: hospitalCode);
   }
+
+  Map<String, dynamic> toJson() => {
+    'hospital_st_code': hospitalStCode,
+    'category_name': categoryName,
+    'sort_order': sortOrder,
+  };
 }
 
-
-
-
-
-
-/// Screen
-
-class LoginScreen extends ConsumerStatefulWidget {
+/// =======================
+/// Screen (스토리지 + API / provider 없음)
+/// =======================
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+  State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen> {
+class _LoginScreenState extends State<LoginScreen> {
+  static const _storage = FlutterSecureStorage();
+
+
+  // storage keys
+  static const _kHospitalCode = 'hospital_code';
+  static const _kSelectedWardJson = 'selected_ward_json';
+
+  late final String _front_url;
+
   final idCtrl = TextEditingController();
   final pwCtrl = TextEditingController();
 
-  bool loading = false;
-  bool authed = true;
+  bool loading = false; // 로그인 로딩
+  bool wardsLoading = false; // 병동 로딩
+  bool authed = false;
+
+  int? hospitalCode;
+  List<WardItem> wards = [];
+
+  bool _autoRouted = false; // wards 비었을 때 자동 라우팅 1회만
+
+  @override
+  void initState() {
+    super.initState();
+    _front_url = Urlconfig.serverUrl.toString();
+    loadData();
+  }
 
   @override
   void dispose() {
@@ -120,9 +82,116 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  Future<void> loadData() async {
+    await _bootstrapFromStorage();
+  }
+
+  Future<void> _bootstrapFromStorage() async {
+    try {
+      final codeStr = await _storage.read(key: _kHospitalCode);
+      final code = int.tryParse(codeStr ?? '');
+      hospitalCode = code;
+
+      // 선택 병동이 있으면 바로 대시보드로
+      final wardJson = await _storage.read(key: _kSelectedWardJson);
+      if (wardJson != null && wardJson.isNotEmpty) {try {
+        final m = jsonDecode(wardJson);
+        if (m is Map) {
+          final w = WardItem.fromJson(Map<String, dynamic>.from(m));
+          await _storage.write(key: StorageKeys.selectedWardStCode, value: w.hospitalStCode.toString());
+          await _storage.write(key: StorageKeys.selectedWardName, value: w.categoryName);
+        }
+      } catch (_) {}
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.go('/dashboard');
+      });
+      return;
+      }
+
+      if (hospitalCode != null) {
+        setState(() => authed = true);
+        await getData(); // 병동 목록 로드
+      } else {
+        setState(() => authed = false);
+      }
+    } catch (e) {
+      debugPrint('[BOOTSTRAP] error=$e');
+      if (!mounted) return;
+      setState(() => authed = false);
+    }
+  }
+
+  Future<void> getData() async {
+    // ✅ 병동 목록 조회 (/api/hospital/structure/part)
+    if (hospitalCode == null) return;
+
+    try {
+      setState(() {
+        wardsLoading = true;
+        _autoRouted = false;
+      });
+
+      final uri = Uri.parse('$_front_url/api/hospital/structure/part?hospital_code=$hospitalCode');
+      final res = await http.get(uri);
+
+      debugPrint('[WARDS] status=${res.statusCode}');
+      debugPrint('[WARDS] body=${res.body}');
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('병동 조회 실패(HTTP ${res.statusCode})');
+      }
+
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map) throw Exception('병동 조회 응답 형식 오류');
+
+      final ok = decoded['code'] == 1;
+      if (!ok) throw Exception((decoded['message'] ?? '병동 조회 실패').toString());
+
+      final data = decoded['data'];
+      if (data is! Map) throw Exception('병동 조회 data가 비었습니다.');
+
+      final parts = data['parts'];
+      final List<WardItem> next = [];
+      if (parts is List) {
+        for (final e in parts) {
+          if (e is Map<String, dynamic>) {
+            next.add(WardItem.fromJson(e));
+          } else if (e is Map) {
+            next.add(WardItem.fromJson(Map<String, dynamic>.from(e)));
+          }
+        }
+      }
+
+      // sort_order 정렬(선택)
+      next.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
+      if (!mounted) return;
+      setState(() {
+        wards = next;
+        wardsLoading = false;
+      });
+
+      // ✅ 병동이 없으면 예외 UI 없이 대시보드로 바로 이동
+      if (wards.isEmpty && !_autoRouted) {
+        _autoRouted = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          context.go('/dashboard');
+        });
+      }
+    } catch (e) {
+      debugPrint('[WARDS] error=$e');
+      if (!mounted) return;
+      setState(() {
+        wards = [];
+        wardsLoading = false;
+      });
+
+      // 에러는 최소 알림만 (원치 않으면 주석)
+      _snack('병동 조회 실패: $e');
+    }
   }
 
   Future<void> _login() async {
@@ -137,48 +206,91 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     setState(() => loading = true);
 
     try {
-      final result = await _LoginApi.login(hospitalId: id, hospitalPassword: pw);
-      if (!mounted) return;
+      final uri = Uri.parse('$_front_url/api/auth/login');
 
-      if (!result.ok) {
-        setState(() {
-          loading = false;
-          authed = false;
-        });
-        _snack(result.message);
-        return;
+      final res = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'hospital_id': id,
+          'hospital_password': pw,
+        }),
+      );
+
+      debugPrint('[LOGIN] status=${res.statusCode}');
+      debugPrint('[LOGIN] body=${res.body}');
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('로그인 실패(HTTP ${res.statusCode})');
       }
 
-      // 로그인 성공 → hospital_code 저장 → 병동 목록 트리거
-      ref.read(ws.hospitalCodeProvider.notifier).state = result.hospitalCode;
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map) throw Exception('로그인 응답 형식 오류');
 
-      // 병동 목록 새로고침(선택)
-      ref.invalidate(ws.wardListProvider);
+      final ok = decoded['code'] == 1;
+      if (!ok) {
+        final msg = (decoded['message'] ?? '로그인 실패').toString();
+        throw Exception(msg);
+      }
 
+      final data = decoded['data'];
+      if (data is! Map) throw Exception('로그인 응답 data가 비었습니다.');
+
+      final code = int.tryParse(data['hospital_code']?.toString() ?? '');
+      if (code == null) throw Exception('병원 코드(hospital_code)를 읽지 못했습니다.');
+
+      // ✅ storage 저장
+      await _storage.write(key: _kHospitalCode, value: code.toString());
+
+      if (!mounted) return;
       setState(() {
-        loading = false;
+        hospitalCode = code;
         authed = true;
+        loading = false;
       });
+
+      // ✅ 병동 목록 로드
+      await getData();
     } catch (e) {
       debugPrint('[LOGIN] error=$e');
       if (!mounted) return;
-
       setState(() {
         loading = false;
         authed = false;
       });
-      _snack('요청 실패: $e');
+      _snack('로그인 실패: $e');
     }
   }
 
-  void _backToLogin() {
-    // ws/dp 모두 초기화해서 꼬임 방지
-    ref.read(ws.selectedWardProvider.notifier).state = null;
-    ref.read(ws.hospitalCodeProvider.notifier).state = null;
+  Future<void> _selectWard(WardItem w) async {
+    // ✅ 선택 병동 저장 후 대시보드로
+    await _storage.write(key: _kSelectedWardJson, value: jsonEncode(w.toJson()));
 
-    ref.invalidate(ws.wardListProvider);
+    // ✅ 대시보드가 읽는 키들로도 저장
+    await _storage.write(key: StorageKeys.selectedWardStCode, value: w.hospitalStCode.toString());
+    await _storage.write(key: StorageKeys.selectedWardName, value: w.categoryName);
 
-    setState(() => authed = false);
+    if (!mounted) return;
+    context.go('/dashboard');
+  }
+
+  Future<void> _backToLogin() async {
+    // storage 초기화
+    await _storage.delete(key: StorageKeys.selectedWardStCode);
+    await _storage.delete(key: StorageKeys.selectedWardName);
+
+    if (!mounted) return;
+    setState(() {
+      authed = false;
+      hospitalCode = null;
+      wards = [];
+      _autoRouted = false;
+    });
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -187,7 +299,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       title: authed ? '병동 선택' : '로그인',
       subtitle: authed ? '대시보드로 이동할 병동을 선택해 주세요.' : '계정 정보를 입력해 주세요.',
       child: authed
-          ? const _WardButtons()
+          ? _WardButtons(
+        wards: wards,
+        loading: wardsLoading,
+        onRetry: getData,
+        onSelect: _selectWard,
+      )
           : _LoginForm(
         onLogin: _login,
         loading: loading,
@@ -226,9 +343,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 }
 
-/// =======================================================
-/// 모든 위젯 Stateful로 통일
-/// =======================================================
+/// =======================
+/// UI Widgets (전부 Stateful)
+/// =======================
+
 class _LeftIntro extends StatefulWidget {
   const _LeftIntro({super.key});
 
@@ -295,11 +413,15 @@ class _AuthCardState extends State<_AuthCard> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.title,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF111827))),
+          Text(
+            widget.title,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF111827)),
+          ),
           const SizedBox(height: 6),
-          Text(widget.subtitle,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          Text(
+            widget.subtitle,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6B7280)),
+          ),
           const SizedBox(height: 18),
           widget.child,
           const SizedBox(height: 14),
@@ -397,21 +519,27 @@ class _LoginFormState extends State<_LoginForm> {
   }
 }
 
-/// =======================================================
-/// Ward Select (ConsumerStatefulWidget로 변경)
-/// =======================================================
-class _WardButtons extends ConsumerStatefulWidget {
-  const _WardButtons({super.key});
+class _WardButtons extends StatefulWidget {
+  final List<WardItem> wards;
+  final bool loading;
+  final Future<void> Function() onRetry;
+  final Future<void> Function(WardItem w) onSelect;
+
+  const _WardButtons({
+    super.key,
+    required this.wards,
+    required this.loading,
+    required this.onRetry,
+    required this.onSelect,
+  });
 
   @override
-  ConsumerState<_WardButtons> createState() => _WardButtonsState();
+  State<_WardButtons> createState() => _WardButtonsState();
 }
 
-class _WardButtonsState extends ConsumerState<_WardButtons> {
+class _WardButtonsState extends State<_WardButtons> {
   @override
   Widget build(BuildContext context) {
-    final asyncWards = ref.watch(ws.wardListProvider);
-
     final btnStyle = ElevatedButton.styleFrom(
       backgroundColor: const Color(0xFF65C466),
       foregroundColor: Colors.white,
@@ -421,191 +549,31 @@ class _WardButtonsState extends ConsumerState<_WardButtons> {
       elevation: 0,
     );
 
-    final addBtnStyle = OutlinedButton.styleFrom(
-      foregroundColor: const Color(0xFF65C466),
-      side: const BorderSide(color: Color(0xFF65C466), width: 1.2),
-      minimumSize: const Size.fromHeight(48),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
-    );
-
-    return asyncWards.when(
-      loading: () => const Padding(
+    if (widget.loading) {
+      return const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
         child: Center(child: CircularProgressIndicator()),
-      ),
-      error: (e, _) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            '병동 목록을 불러오지 못했습니다.',
-            style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800),
+      );
+    }
+
+    // ✅ 병동 없을 때 UI 없이 넘어가는 건 상위(getData)에서 처리됨
+    // 여기서는 그냥 빈 Column 반환
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final w in widget.wards) ...[
+          ElevatedButton(
+            style: btnStyle,
+            onPressed: () => widget.onSelect(w),
+            child: Text(w.categoryName),
           ),
           const SizedBox(height: 10),
-          OutlinedButton(
-            onPressed: () => ref.invalidate(ws.wardListProvider),
-            child: const Text('다시 시도'),
-          ),
         ],
-      ),
-      data: (wards) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (wards.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 6),
-                child: Text('등록된 병동이 없습니다.', style: TextStyle(fontWeight: FontWeight.w800)),
-              )
-            else
-              for (final w in wards) ...[
-                ElevatedButton(
-                  style: btnStyle,
-                  onPressed: () {
-                    ref.read(ws.selectedWardProvider.notifier).state = w;
-                    GoRouter.of(context).go('/dashboard');
-                  },
-                  child: Text(w.categoryName),
-                ),
-                const SizedBox(height: 10),
-              ],
-            const SizedBox(height: 6),
-            OutlinedButton.icon(
-              style: addBtnStyle,
-              icon: const Icon(Icons.add),
-              label: const Text('병동 추가'),
-              onPressed: () async {
-                final name = await _showAddWardDialog(context);
-                if (name == null) return;
-
-                try {
-                  final hospitalCode = ref.read(ws.hospitalCodeProvider);
-                  if (hospitalCode == null) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('병원 코드가 없습니다. 다시 로그인해 주세요.')),
-                    );
-                    return;
-                  }
-
-                  await ref.read(ws.wardRepositoryProvider).createWard(
-                    hospitalCode: hospitalCode,
-                    categoryName: name,
-                  );
-
-                  ref.invalidate(ws.wardListProvider);
-
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('병동이 추가되었습니다: $name')),
-                    );
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('병동 추가 실패: $e')),
-                    );
-                  }
-                }
-              },
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              '※ 병동 목록은 (추후) DB/백엔드에서 받아 자동 생성됩니다.',
-              style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12, fontWeight: FontWeight.w700),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-
-
-  //병동 추가 라인
-  Future<String?> _showAddWardDialog(BuildContext context) async {
-    final ctrl = TextEditingController();
-
-    const green = Color(0xFF16A34A);
-    const border = Color(0xFFE5E7EB);
-    const text = Color(0xFF111827);
-    const subText = Color(0xFF6B7280);
-
-    return showDialog<String?>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        elevation: 0,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: border),
+        OutlinedButton(
+          onPressed: widget.onRetry,
+          child: const Text('새로고침'),
         ),
-        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-        contentPadding: const EdgeInsets.fromLTRB(20, 6, 20, 2),
-        actionsPadding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-        title: const Text(
-          '병동 추가',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: text),
-        ),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          cursorColor: green,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: text),
-          decoration: InputDecoration(
-            hintText: '예) 3병동, 중환자실, VIP실',
-            hintStyle: const TextStyle(color: subText, fontWeight: FontWeight.w600),
-            isDense: true,
-            filled: true,
-            fillColor: const Color(0xFFF9FAFB),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: border),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: green, width: 1.6),
-            ),
-          ),
-          onSubmitted: (_) {
-            final v = ctrl.text.trim();
-            if (v.isEmpty) return;
-            Navigator.pop(ctx, v);
-          },
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: subText,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              textStyle: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: green,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              textStyle: const TextStyle(fontWeight: FontWeight.w900),
-            ),
-            onPressed: () {
-              final v = ctrl.text.trim();
-              if (v.isEmpty) return;
-              Navigator.pop(ctx, v);
-            },
-            child: const Text('추가'),
-          ),
-        ],
-      ),
+      ],
     );
   }
 }

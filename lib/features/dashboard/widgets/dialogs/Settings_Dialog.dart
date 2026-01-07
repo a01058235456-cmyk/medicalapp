@@ -1,47 +1,349 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
-import '../../../auth/providers/ward_select_providers.dart' as wards;
+import 'package:http/http.dart' as http;
+
+import 'package:medicalapp/urlConfig.dart';
+import 'package:medicalapp/storage_keys.dart';
 
 enum SettingsSection {
   accountInfo,   // 회원정보
   password,      // 비밀번호 변경
   withdraw,      // 회원 탈퇴
   mySettings,    // 내 설정
-  systemInfo,    // 시스템 정보(앱 버전 등)
-  wardManage,    // ✅ 병동 관리
+  systemInfo,    // 시스템 정보
+  wardManage,    // 병동 관리
 }
 
-class SettingsDialog extends ConsumerStatefulWidget {
+class SettingsDialog extends StatefulWidget {
   const SettingsDialog({super.key});
 
   @override
-  ConsumerState<SettingsDialog> createState() => _SettingsDialogState();
+  State<SettingsDialog> createState() => _SettingsDialogState();
 }
 
-class _SettingsDialogState extends ConsumerState<SettingsDialog> {
+class _SettingsDialogState extends State<SettingsDialog> {
+  static const _storage = FlutterSecureStorage();
+
+  late final String _baseUrl;
   SettingsSection _section = SettingsSection.accountInfo;
 
-  Future<void> _logout(BuildContext context) async {
-    // TODO(백엔드 연결 시):
-    // 1) 토큰 삭제(SecureStorage/SharedPreferences)
-    // 2) 전역 상태(Provider) 초기화
-    // 3) 로그인 화면으로 이동
+  bool _loading = false;
 
-    if (!context.mounted) return;
+  // 병원 정보(회원정보 화면)
+  int? _hospitalCode;
+  String _hospitalId = '';
+  String _hospitalName = '';
 
-    // ✅ 예시: 선택 병동 초기화 (프로젝트 구조에 맞게 통일된 provider로 바꾸세요)
-    // ref.read(selectedWardProvider.notifier).state = null;
+  // 병동 관리
+  bool _wardsLoading = false;
+  List<_WardItem> _wards = [];
 
-    // 설정창 닫기
+  // 비밀번호 변경
+  final _newPwCtrl = TextEditingController();
+  final _newPwVerifyCtrl = TextEditingController();
+  bool _pwSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _baseUrl = Urlconfig.serverUrl.toString();
+    loadData(); // 기본: 회원정보 탭 데이터 로드
+  }
+
+  @override
+  void dispose() {
+    _newPwCtrl.dispose();
+    _newPwVerifyCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> loadData() async {
+    setState(() => _loading = true);
+    await getData();
+    setState(() => _loading = false);
+  }
+
+  Future<void> getData() async {
+    // hospital_code 읽기
+    final codeStr = await _storage.read(key: StorageKeys.hospitalCode);
+    final code = int.tryParse((codeStr ?? '').trim());
+    _hospitalCode = code;
+
+    // 회원정보 탭 기본 로드
+    if (_section == SettingsSection.accountInfo) {
+      await _loadAccountInfo();
+    }
+
+    // 병동관리 탭이면 병동 로드
+    if (_section == SettingsSection.wardManage) {
+      await _loadWards();
+    }
+  }
+
+  Future<Map<String, dynamic>?> _getJson(Uri uri) async {
+    final res = await http.get(uri, headers: {'Content-Type': 'application/json'});
+    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map<String, dynamic>) return null;
+    return decoded;
+  }
+
+  Future<Map<String, dynamic>?> _sendJson(
+      String method,
+      Uri uri, {
+        Map<String, dynamic>? body,
+      }) async {
+    final req = http.Request(method, uri);
+    req.headers['Content-Type'] = 'application/json';
+    if (body != null) {
+      req.body = jsonEncode(body);
+    }
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map<String, dynamic>) return null;
+    return decoded;
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _logout() async {
+    if (!mounted) return;
+
+    // 필요하면 여기서 저장된 키들 정리
+    await _storage.delete(key: StorageKeys.selectedWardStCode);
+    await _storage.delete(key: StorageKeys.selectedWardName);
+    await _storage.delete(key: StorageKeys.selectedFloorStCode);
+    await _storage.delete(key: StorageKeys.floorLabel);
+
     Navigator.pop(context);
-
-    // ✅ 로그인 화면으로 이동
     GoRouter.of(context).go('/login');
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('로그아웃 처리 로직을 연결하세요.')),
+  Future<void> _loadAccountInfo() async {
+    final code = _hospitalCode;
+    if (code == null) {
+      _hospitalId = '';
+      _hospitalName = '';
+      return;
+    }
+
+    final uri = Uri.parse('$_baseUrl/api/auth/email?hospital_code=$code');
+    final decoded = await _getJson(uri);
+    if (decoded == null) return;
+
+    if (decoded['code'] != 1) return;
+
+    final data = decoded['data'];
+    if (data is! Map<String, dynamic>) return;
+
+    setState(() {
+      _hospitalId = (data['hospital_id']?.toString() ?? '').trim();
+      _hospitalName = (data['hospital_name']?.toString() ?? '').trim();
+    });
+  }
+
+  Future<void> _loadWards() async {
+    final code = _hospitalCode;
+    if (code == null) {
+      setState(() => _wards = []);
+      return;
+    }
+
+    setState(() => _wardsLoading = true);
+
+    // 병동 목록 조회(이 엔드포인트는 이전에 사용하던 명세 기준)
+    // /api/hospital/structure/part?hospital_code=1
+    final uri = Uri.parse('$_baseUrl/api/hospital/structure/part?hospital_code=$code');
+    final decoded = await _getJson(uri);
+
+    if (decoded == null || decoded['code'] != 1) {
+      setState(() => _wardsLoading = false);
+      return;
+    }
+
+    final data = decoded['data'];
+    if (data is! Map<String, dynamic>) {
+      setState(() => _wardsLoading = false);
+      return;
+    }
+
+    final parts = (data['parts'] as List?) ?? [];
+    final list = <_WardItem>[];
+
+    for (final e in parts) {
+      if (e is! Map) continue;
+      final st = int.tryParse(e['hospital_st_code']?.toString() ?? '');
+      final name = (e['category_name']?.toString() ?? '').trim();
+      final sort = int.tryParse(e['sort_order']?.toString() ?? '') ?? 0;
+      if (st == null) continue;
+      list.add(_WardItem(hospitalStCode: st, categoryName: name, sortOrder: sort));
+    }
+
+    // sort_order 기준 정렬
+    list.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
+    setState(() {
+      _wards = list;
+      _wardsLoading = false;
+    });
+  }
+
+  Future<void> _changePassword() async {
+    final newPw = _newPwCtrl.text.trim();
+    final newPwV = _newPwVerifyCtrl.text.trim();
+
+    if (newPw.isEmpty || newPwV.isEmpty) {
+      _snack('새 비밀번호와 확인을 입력해 주세요.');
+      return;
+    }
+    if (newPw != newPwV) {
+      _snack('새 비밀번호와 확인이 일치하지 않습니다.');
+      return;
+    }
+
+    setState(() => _pwSaving = true);
+
+    try {
+      final uri = Uri.parse('$_baseUrl/api/auth/email/update');
+      final decoded = await _sendJson('PUT', uri, body: {
+        'hospital_new_password': newPw,
+        'hospital_new_password_verify': newPwV,
+      });
+
+      if (decoded == null) {
+        _snack('비밀번호 변경 요청 실패');
+        return;
+      }
+
+      if (decoded['code'] == 1) {
+        _snack('비밀번호가 변경되었습니다.');
+        _newPwCtrl.clear();
+        _newPwVerifyCtrl.clear();
+      } else {
+        _snack((decoded['message'] ?? '비밀번호 변경 실패').toString());
+      }
+    } finally {
+      if (mounted) setState(() => _pwSaving = false);
+    }
+  }
+
+  Future<void> _withdraw() async {
+    final code = _hospitalCode;
+    if (code == null) {
+      _snack('병원 코드가 없습니다. 다시 로그인해 주세요.');
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('회원 탈퇴', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const Text('정말 탈퇴하시겠습니까?\n탈퇴 후에는 계정을 복구할 수 없습니다.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('탈퇴'),
+          ),
+        ],
+      ),
     );
+
+    if (ok != true) return;
+
+    final uri = Uri.parse('$_baseUrl/api/auth/email/delete/$code');
+    final decoded = await _sendJson('DELETE', uri);
+
+    if (decoded == null) {
+      _snack('탈퇴 요청 실패');
+      return;
+    }
+
+    if (decoded['code'] == 1) {
+      _snack('탈퇴가 완료되었습니다.');
+      // 키 정리 후 로그인 화면
+      await _storage.deleteAll();
+      if (!mounted) return;
+      Navigator.pop(context);
+      GoRouter.of(context).go('/login');
+    } else {
+      _snack((decoded['message'] ?? '탈퇴 실패').toString());
+    }
+  }
+
+  Future<void> _renameWard(_WardItem w) async {
+    final nextName = await _showTextDialog(
+      context,
+      title: '병동 이름 수정',
+      initial: w.categoryName,
+      hint: '병동 이름을 입력',
+    );
+    if (nextName == null) return;
+
+    final uri = Uri.parse('$_baseUrl/api/hospital/structure/update');
+
+    // 명세에 hopital_st_code 오타가 있어 둘 다 보내서 안전하게 처리
+    final decoded = await _sendJson('PUT', uri, body: {
+      'hopital_st_code': w.hospitalStCode,
+      'hospital_st_code': w.hospitalStCode,
+      'category_name': nextName,
+    });
+
+    if (decoded == null) {
+      _snack('병동 이름 수정 실패');
+      return;
+    }
+    if (decoded['code'] == 1) {
+      _snack('병동 이름이 변경되었습니다: $nextName');
+      await _loadWards();
+    } else {
+      _snack((decoded['message'] ?? '병동 이름 수정 실패').toString());
+    }
+  }
+
+  Future<void> _deleteWard(_WardItem w) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('병동 삭제', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: Text('정말 "${w.categoryName}" 병동을 삭제하시겠습니까?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    final uri = Uri.parse('$_baseUrl/api/hospital/structure/delete/${w.hospitalStCode}');
+    final decoded = await _sendJson('DELETE', uri);
+
+    if (decoded == null) {
+      _snack('병동 삭제 실패');
+      return;
+    }
+    if (decoded['code'] == 1) {
+      _snack('병동이 삭제되었습니다: ${w.categoryName}');
+      await _loadWards();
+    } else {
+      _snack((decoded['message'] ?? '병동 삭제 실패').toString());
+    }
   }
 
   @override
@@ -57,16 +359,11 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: const Color(0xFFE5E7EB)),
           boxShadow: const [
-            BoxShadow(
-              color: Color(0x14000000),
-              blurRadius: 20,
-              offset: Offset(0, 10),
-            )
+            BoxShadow(color: Color(0x14000000), blurRadius: 20, offset: Offset(0, 10)),
           ],
         ),
         child: Column(
           children: [
-            // 상단 헤더
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 16, 10, 12),
               child: Row(
@@ -100,7 +397,10 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
                           title: '회원정보',
                           icon: Icons.badge_outlined,
                           selected: _section == SettingsSection.accountInfo,
-                          onTap: () => setState(() => _section = SettingsSection.accountInfo),
+                          onTap: () async {
+                            setState(() => _section = SettingsSection.accountInfo);
+                            await loadData();
+                          },
                         ),
                         _MenuItem(
                           title: '비밀번호 변경',
@@ -120,13 +420,15 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
                         const Divider(height: 1),
                         const SizedBox(height: 10),
 
-                        // ✅ 병동 관리 섹션 추가
                         const _MenuTitle('병동 관리'),
                         _MenuItem(
                           title: '병동 관리',
                           icon: Icons.apartment_outlined,
                           selected: _section == SettingsSection.wardManage,
-                          onTap: () => setState(() => _section = SettingsSection.wardManage),
+                          onTap: () async {
+                            setState(() => _section = SettingsSection.wardManage);
+                            await loadData();
+                          },
                         ),
 
                         const SizedBox(height: 10),
@@ -160,7 +462,9 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(18),
-                      child: _buildContent(),
+                      child: _loading
+                          ? const Center(child: CircularProgressIndicator())
+                          : _buildContent(),
                     ),
                   ),
                 ],
@@ -175,221 +479,103 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   Widget _buildContent() {
     switch (_section) {
       case SettingsSection.accountInfo:
-        return _AccountInfoView(onLogout: () => _logout(context));
-      case SettingsSection.password:
-        return const _PasswordChangeView();
-      case SettingsSection.withdraw:
-        return _WithdrawView(
-          onConfirm: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('탈퇴 처리 로직을 연결하세요.')),
+        return _AccountInfoView(
+          hospitalCode: _hospitalCode,
+          hospitalId: _hospitalId,
+          hospitalName: _hospitalName,
+          onReload: loadData,
+          onLogout: () async {
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (_) => AlertDialog(
+                backgroundColor: const Color(0xFFFFFFFF), // ✅ 화이트 톤
+                surfaceTintColor: Colors.transparent,     // ✅ 머티리얼 틴트 제거(색 변형 방지)
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFFE5E7EB)), // ✅ 얇은 테두리
+                ),
+                elevation: 2,
+
+                // ✅ 기본 padding(전체 여백)
+                insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+                contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+
+                title: const Text(
+                  '로그아웃',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+
+                content: const Text(
+                  '로그아웃 하시겠습니까?',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                    color: Color(0xFF374151),
+                    height: 1.35,
+                  ),
+                ),
+
+                actions: [
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF374151),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('취소'),
+                  ),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF22C55E), // ✅ 그린 포인트(기존 톤)
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('로그아웃'),
+                  ),
+                ],
+              )
             );
+            if (ok == true) await _logout();
           },
         );
+
+      case SettingsSection.password:
+        return _PasswordChangeView(
+          newPwCtrl: _newPwCtrl,
+          newPwVerifyCtrl: _newPwVerifyCtrl,
+          saving: _pwSaving,
+          onSubmit: _changePassword,
+        );
+
+      case SettingsSection.withdraw:
+        return _WithdrawView(onConfirm: _withdraw);
+
       case SettingsSection.mySettings:
         return const _MySettingsView();
+
       case SettingsSection.systemInfo:
         return const _SystemInfoView();
 
       case SettingsSection.wardManage:
-        return const _WardManageView();
+        return _WardManageView(
+          hospitalCode: _hospitalCode,
+          loading: _wardsLoading,
+          wards: _wards,
+          onReload: _loadWards,
+          onRename: _renameWard,
+          onDelete: _deleteWard,
+        );
     }
-  }
-}
-
-/* -------------------- 병동 관리 뷰 -------------------- */
-
-class _WardManageView extends ConsumerWidget {
-  const _WardManageView();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // TODO: 로그인 후 hospitalCode를 전역으로 들고 있으면 그 값으로 교체
-    const hospitalCode = 1;
-
-    final asyncWards = ref.watch(wards.wardListProvider);
-
-    return _PanelCard(
-      title: '병동 관리',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 상단 액션(추가/새로고침)
-          Row(
-            children: [
-              const Text(
-                '병동 목록을 관리합니다.',
-                style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                icon: const Icon(Icons.add),
-                label: const Text('병동 추가'),
-                onPressed: () async {
-                  final name = await _showTextDialog(
-                    context,
-                    title: '병동 추가',
-                    hint: '예) 3 병동, 중환자실, VIP 실',
-                  );
-                  if (name == null) return;
-
-                  try {
-                    await ref.read(wards.wardRepositoryProvider).createWard(
-                      hospitalCode: hospitalCode,
-                      categoryName: name,
-                    );
-                    ref.invalidate(wards.wardListProvider);
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('병동이 추가되었습니다: $name')),
-                      );
-                    }
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('병동 추가 실패: $e')),
-                      );
-                    }
-                  }
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Divider(height: 1),
-          const SizedBox(height: 14),
-
-          Expanded(
-            child: asyncWards.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(
-                child: Text(
-                  '병동 목록을 불러오지 못했습니다.\n$e',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800),
-                ),
-              ),
-              data: (list) {
-                if (list.isEmpty) {
-                  return const Center(
-                    child: Text('등록된 병동이 없습니다.', style: TextStyle(fontWeight: FontWeight.w800)),
-                  );
-                }
-
-                return ListView.separated(
-                  itemCount: list.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (_, i) {
-                    final w = list[i];
-                    return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF9FAFB),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFE5E7EB)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.apartment_outlined, color: Color(0xFF374151)),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              w.categoryName,
-                              style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF111827)),
-                            ),
-                          ),
-
-                          // ✅ 이름 수정
-                          IconButton(
-                            tooltip: '이름 수정',
-                            icon: const Icon(Icons.edit_outlined),
-                            onPressed: () async {
-                              final nextName = await _showTextDialog(
-                                context,
-                                title: '병동 이름 수정',
-                                initial: w.categoryName,
-                                hint: '병동 이름을 입력',
-                              );
-                              if (nextName == null) return;
-
-                              try {
-                                await ref.read(wards.wardRepositoryProvider).updateWard(
-                                  hospitalCode: hospitalCode,
-                                  hospitalStCode: w.hospitalStCode,
-                                  categoryName: nextName,
-                                );
-                                ref.invalidate(wards.wardListProvider);
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('병동 이름이 변경되었습니다: $nextName')),
-                                  );
-                                }
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('이름 수정 실패: $e')),
-                                  );
-                                }
-                              }
-                            },
-                          ),
-
-                          // ✅ 삭제
-                          IconButton(
-                            tooltip: '삭제',
-                            icon: const Icon(Icons.delete_outline, color: Color(0xFFEF4444)),
-                            onPressed: () async {
-                              final ok = await showDialog<bool>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  title: const Text('병동 삭제', style: TextStyle(fontWeight: FontWeight.w900)),
-                                  content: Text('정말 "${w.categoryName}" 병동을 삭제하시겠습니까?'),
-                                  actions: [
-                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444), foregroundColor: Colors.white),
-                                      onPressed: () => Navigator.pop(ctx, true),
-                                      child: const Text('삭제'),
-                                    ),
-                                  ],
-                                ),
-                              );
-
-                              if (ok != true) return;
-
-                              try {
-                                await ref.read(wards.wardRepositoryProvider).deleteWard(
-                                  hospitalCode: hospitalCode,
-                                  hospitalStCode: w.hospitalStCode,
-                                );
-                                ref.invalidate(wards.wardListProvider);
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('병동이 삭제되었습니다: ${w.categoryName}')),
-                                  );
-                                }
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('삭제 실패: $e')),
-                                  );
-                                }
-                              }
-                            },
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   static Future<String?> _showTextDialog(
@@ -432,7 +618,120 @@ class _WardManageView extends ConsumerWidget {
   }
 }
 
-/* -------------------- 이하 기존 UI(마스터님 코드 그대로) -------------------- */
+
+
+/* -------------------- 병동 관리(병동 추가 버튼 삭제 버전) -------------------- */
+
+class _WardManageView extends StatelessWidget {
+  final int? hospitalCode;
+  final bool loading;
+  final List<_WardItem> wards;
+
+  final Future<void> Function() onReload;
+  final Future<void> Function(_WardItem w) onRename;
+  final Future<void> Function(_WardItem w) onDelete;
+
+  const _WardManageView({
+    required this.hospitalCode,
+    required this.loading,
+    required this.wards,
+    required this.onReload,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _PanelCard(
+      title: '병동 관리',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '병동 목록을 관리합니다.',
+                style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const SizedBox(height: 14),
+
+          Expanded(
+            child: () {
+              if (hospitalCode == null) {
+                return const Center(
+                  child: Text('병원 코드가 없습니다.\n다시 로그인해 주세요.', textAlign: TextAlign.center),
+                );
+              }
+              if (loading) return const Center(child: CircularProgressIndicator());
+              if (wards.isEmpty) {
+                return const Center(
+                  child: Text('등록된 병동이 없습니다.', style: TextStyle(fontWeight: FontWeight.w800)),
+                );
+              }
+
+              return ListView.separated(
+                itemCount: wards.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, i) {
+                  final w = wards[i];
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.apartment_outlined, color: Color(0xFF374151)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            w.categoryName,
+                            style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF111827)),
+                          ),
+                        ),
+
+                        IconButton(
+                          tooltip: '이름 수정',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => onRename(w),
+                        ),
+                        IconButton(
+                          tooltip: '삭제',
+                          icon: const Icon(Icons.delete_outline, color: Color(0xFFEF4444)),
+                          onPressed: () => onDelete(w),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/* -------------------- 이하 UI 공통 -------------------- */
+
+class _WardItem {
+  final int hospitalStCode;
+  final String categoryName;
+  final int sortOrder;
+
+  const _WardItem({
+    required this.hospitalStCode,
+    required this.categoryName,
+    required this.sortOrder,
+  });
+}
 
 class _MenuTitle extends StatelessWidget {
   final String text;
@@ -484,9 +783,7 @@ class _MenuItem extends StatelessWidget {
           children: [
             Icon(icon, size: 20, color: fg),
             const SizedBox(width: 10),
-            Expanded(
-              child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, color: fg)),
-            ),
+            Expanded(child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, color: fg))),
             if (selected) const Icon(Icons.chevron_right, color: Color(0xFF6B7280)),
           ],
         ),
@@ -523,9 +820,20 @@ class _PanelCard extends StatelessWidget {
 }
 
 class _AccountInfoView extends StatelessWidget {
+  final int? hospitalCode;
+  final String hospitalId;
+  final String hospitalName;
+
+  final Future<void> Function() onReload;
   final Future<void> Function() onLogout;
 
-  const _AccountInfoView({required this.onLogout});
+  const _AccountInfoView({
+    required this.hospitalCode,
+    required this.hospitalId,
+    required this.hospitalName,
+    required this.onReload,
+    required this.onLogout,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -534,30 +842,32 @@ class _AccountInfoView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _InfoRow(label: '아이디', value: 'master01'),
+          _InfoRow(label: '아이디', value: hospitalId.isEmpty ? '-' : hospitalId),
+          const SizedBox(height: 10),
+          _InfoRow(label: '병원명', value: hospitalName.isEmpty ? '-' : hospitalName),
           const SizedBox(height: 18),
           const Divider(height: 1),
           const SizedBox(height: 14),
-          Align(
-            alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.logout),
-              label: const Text('로그아웃'),
-              onPressed: () async {
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('로그아웃'),
-                    content: const Text('로그아웃 하시겠습니까?'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
-                      FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('로그아웃')),
-                    ],
-                  ),
-                );
-                if (ok == true) await onLogout();
-              },
-            ),
+          Row(
+            children: [
+              const Spacer(),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.logout),
+                label: const Text('로그아웃'),
+                onPressed: () async {
+                  const storage = FlutterSecureStorage();
+
+                  await storage.delete(key: 'hospital_code');
+                  await storage.delete(key: 'selected_ward_json'); // 로그인에서 쓰던 키(있으면 삭제)
+                  await storage.delete(key: StorageKeys.selectedWardStCode);
+                  await storage.delete(key: StorageKeys.selectedWardName);
+                  await storage.delete(key: StorageKeys.selectedFloorStCode);
+                  await storage.delete(key: StorageKeys.floorLabel);
+
+                  await onLogout(); // 기존 로그아웃(이동/스낵바 등)
+                },
+              ),
+            ],
           ),
         ],
       ),
@@ -566,7 +876,17 @@ class _AccountInfoView extends StatelessWidget {
 }
 
 class _PasswordChangeView extends StatelessWidget {
-  const _PasswordChangeView();
+  final TextEditingController newPwCtrl;
+  final TextEditingController newPwVerifyCtrl;
+  final bool saving;
+  final Future<void> Function() onSubmit;
+
+  const _PasswordChangeView({
+    required this.newPwCtrl,
+    required this.newPwVerifyCtrl,
+    required this.saving,
+    required this.onSubmit,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -576,6 +896,7 @@ class _PasswordChangeView extends StatelessWidget {
         children: [
           const SizedBox(height: 12),
           TextField(
+            controller: newPwCtrl,
             obscureText: true,
             decoration: InputDecoration(
               labelText: '새 비밀번호',
@@ -586,6 +907,7 @@ class _PasswordChangeView extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           TextField(
+            controller: newPwVerifyCtrl,
             obscureText: true,
             decoration: InputDecoration(
               labelText: '새 비밀번호 확인',
@@ -598,12 +920,10 @@ class _PasswordChangeView extends StatelessWidget {
           Align(
             alignment: Alignment.centerRight,
             child: FilledButton(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('비밀번호 변경 로직을 연결하세요.')),
-                );
-              },
-              child: const Text('변경'),
+              onPressed: saving ? null : onSubmit,
+              child: saving
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('변경'),
             ),
           ),
         ],
@@ -613,7 +933,7 @@ class _PasswordChangeView extends StatelessWidget {
 }
 
 class _WithdrawView extends StatelessWidget {
-  final VoidCallback onConfirm;
+  final Future<void> Function() onConfirm;
   const _WithdrawView({required this.onConfirm});
 
   @override
@@ -632,24 +952,7 @@ class _WithdrawView extends StatelessWidget {
             alignment: Alignment.centerRight,
             child: FilledButton(
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
-              onPressed: () async {
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('회원 탈퇴'),
-                    content: const Text('정말 탈퇴하시겠습니까?\n탈퇴 후에는 계정을 복구할 수 없습니다.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white),
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('탈퇴'),
-                      ),
-                    ],
-                  ),
-                );
-                if (ok == true) onConfirm();
-              },
+              onPressed: onConfirm,
               child: const Text('탈퇴하기'),
             ),
           ),
@@ -715,9 +1018,7 @@ class _InfoRow extends StatelessWidget {
           width: 120,
           child: Text(label, style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w800)),
         ),
-        Expanded(
-          child: Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
-        ),
+        Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.w900))),
       ],
     );
   }
