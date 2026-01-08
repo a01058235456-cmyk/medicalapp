@@ -1,9 +1,21 @@
+// room_card.dart
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'bed_tile.dart'; //
+import 'package:http/http.dart' as http;
 
+import 'package:medicalapp/urlConfig.dart';
+import 'bed_tile.dart';
 
-/// 명세: /api/hospital/structure?hospital_st_code=4
+import 'dialogs/patient_detail_dialog.dart';
 
+/// 명세 예시:
+/// GET /api/hospital/structure?hospital_st_code=<floorStCode>
+/// -> data.rooms[] 안에 beds[] 포함
+
+// ===============================
+// Models
+// ===============================
 
 class FloorStructureRoom {
   final int hospitalStCode; // room hospital_st_code
@@ -78,28 +90,182 @@ class FloorStructureBed {
   }
 }
 
-/// ===============================
-/// RoomCard (UI)
-/// - room: FloorStructureRoom
-/// - onEmptyBedTap: 빈 침대 클릭 시
-/// - onPatientTap: 환자 클릭 시 (patient_code 기반으로 상세/수정 연결 가능)
-/// ===============================
+// ===============================
+// ✅ RoomsSection (API + 박스/그리드 생성은 여기서)
+// - Dashboard에서는 RoomsSection만 호출하면 됨
+// - RoomCard는 "표시"만 담당
+// ===============================
+
+class RoomsSection extends StatefulWidget {
+  final int? floorStCode; // 선택된 층 hospital_st_code
+
+  /// 필요하면 연결(없으면 null)
+  final Future<void> Function(FloorStructureRoom room, FloorStructureBed bed)? onEmptyBedTap;
+  final Future<void> Function(BedPatientItem patient)? onPatientTap;
+
+  const RoomsSection({
+    super.key,
+    required this.floorStCode,
+    this.onEmptyBedTap,
+    this.onPatientTap,
+  });
+
+  @override
+  State<RoomsSection> createState() => _RoomsSectionState();
+}
+
+class _RoomsSectionState extends State<RoomsSection> {
+  bool _loading = false;
+  String? _error;
+  List<FloorStructureRoom> _rooms = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRooms();
+  }
+
+  @override
+  void didUpdateWidget(covariant RoomsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.floorStCode != widget.floorStCode) {
+      _loadRooms();
+    }
+  }
+
+  Future<void> _loadRooms() async {
+    final st = widget.floorStCode;
+    if (st == null) {
+      setState(() {
+        _rooms = const [];
+        _error = null;
+        _loading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final base = Urlconfig.serverUrl;
+      final uri = Uri.parse('$base/api/hospital/structure?hospital_st_code=$st');
+
+      final res = await http.get(uri, headers: {'Content-Type': 'application/json'});
+      final decoded = jsonDecode(res.body);
+
+      if (decoded is! Map<String, dynamic> || decoded['code'] != 1) {
+        setState(() {
+          _rooms = const [];
+          _error = (decoded is Map && decoded['message'] != null)
+              ? decoded['message'].toString()
+              : '호실 조회 실패';
+          _loading = false;
+        });
+        return;
+      }
+
+      final data = decoded['data'];
+      final roomsAny = (data is Map) ? data['rooms'] : null;
+      final list = (roomsAny is List) ? roomsAny : const [];
+
+      final parsed = list
+          .whereType<Map>()
+          .map((e) => FloorStructureRoom.fromJson(Map<String, dynamic>.from(e)))
+          .toList()
+        ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
+      setState(() {
+        _rooms = parsed;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _rooms = const [];
+        _error = '요청 실패: $e';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 18),
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+
+    if (_error != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          _error!,
+          style: const TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
+
+    if (_rooms.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          '호실 정보가 없습니다.',
+          style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w800),
+        ),
+      );
+    }
+
+    // ✅ 박스/그리드 레이아웃은 room_card.dart에서 관리
+    return LayoutBuilder(
+      builder: (context, c) {
+        final twoCol = c.maxWidth >= 1200;
+        final itemW = twoCol ? (c.maxWidth - 20) / 2 : c.maxWidth;
+
+        return Wrap(
+          spacing: 20,
+          runSpacing: 20,
+          children: [
+            for (final r in _rooms)
+              SizedBox(
+                width: itemW,
+                child: RoomCard(
+                  room: r,
+                  onEmptyBedTap: widget.onEmptyBedTap,
+                  onPatientTap: widget.onPatientTap,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ===============================
+// RoomCard (UI만 담당 / room 필수)
+// ===============================
 
 class RoomCard extends StatefulWidget {
   final FloorStructureRoom room;
 
-  /// 빈 침대 눌렀을 때: (room, bed) 넘어오게 해두면
-  /// 나중에 "환자 추가 다이얼로그 + bed_code" 연결하기 편합니다.
+  /// 빈 침대 눌렀을 때
   final Future<void> Function(FloorStructureRoom room, FloorStructureBed bed)? onEmptyBedTap;
 
-  /// 환자 눌렀을 때: patient_code로 /api/patient/profile?patient_code=... 호출해서 상세 띄우기 좋음
+  /// 환자 눌렀을 때
   final Future<void> Function(BedPatientItem patient)? onPatientTap;
+
+  final Future<void> Function()? onRefresh;
 
   const RoomCard({
     super.key,
     required this.room,
     this.onEmptyBedTap,
     this.onPatientTap,
+    this.onRefresh,
   });
 
   @override
@@ -136,7 +302,6 @@ class _RoomCardState extends State<RoomCard> {
           const SizedBox(height: 14),
           Container(height: 2, color: const Color(0xFF111827)),
           const SizedBox(height: 14),
-
           if (beds.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
@@ -166,24 +331,39 @@ class _RoomCardState extends State<RoomCard> {
                 return BedTile(
                   bedNo: bedNo,
                   patient: patient,
-                  onTap: () async {
-                    if (patient != null) {
-                      if (widget.onPatientTap != null) {
-                        await widget.onPatientTap!(patient);
+                    onTap: () async {
+                      if (patient != null) {
+                        if (widget.onPatientTap != null) {
+                          await widget.onPatientTap!(patient);
+                        } else {
+                          // ✅ 기본 동작: PatientDetailDialog를 띄우고 닫히면 리로드
+                          await showDialog(
+                            context: context,
+                            builder: (ctx) => PatientDetailDialog(
+                              patientCode: patient.patientCode,
+                              roomLabel: room.categoryName, // "Room102" 또는 "102호"
+                              bedLabel: bed.categoryName,   // "Bed-1"
+                              onRefresh: null,
+                            ),
+                          );
+                        }
+
+                        // ✅ 닫기/퇴원/수정 저장 등 어떤 경우든 다이얼로그 닫히면 리로드
+                        if (widget.onRefresh != null) {
+                          await widget.onRefresh!();
+                        }
                       } else {
-                        // 연결 전 기본 동작(크래시 방지)
-                        _simpleInfoDialog(context, patient);
+                        if (widget.onEmptyBedTap != null) {
+                          await widget.onEmptyBedTap!(room, bed);
+                          // 빈침대 액션 후에도 새로고침 원하면 아래 살리세요
+                          if (widget.onRefresh != null) await widget.onRefresh!();
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('빈 침대입니다. (환자 추가 로직을 연결하세요)')),
+                          );
+                        }
                       }
-                    } else {
-                      if (widget.onEmptyBedTap != null) {
-                        await widget.onEmptyBedTap!(room, bed);
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('빈 침대입니다. (환자 추가 로직을 연결하세요)')),
-                        );
-                      }
-                    }
-                  },
+                    },
                 );
               },
             ),

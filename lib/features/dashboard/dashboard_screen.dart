@@ -21,6 +21,7 @@ class DashboardScreen extends StatefulWidget {
 }
 class _DashboardScreenState extends State<DashboardScreen> {
   static const _storage = FlutterSecureStorage();
+  final _scrollCtrl = ScrollController();
 
   late final String _front_url;
   Map<String, dynamic> data = {};
@@ -169,10 +170,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+
+
+
   // ---------------- UI Builders ----------------
 
   Widget _buildSidePanel() {
-    return const SidePanel();
+    return SidePanel(
+      key: ValueKey('side-${selectedFloorStCode ?? 'none'}'),
+      floorStCode: selectedFloorStCode,
+    );
   }
 
 
@@ -212,6 +219,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
 
+
+
   Widget _buildMainScroll({
     required String wardName,
     required String floorLabel,
@@ -222,8 +231,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required List rooms,
   }) {
     return Scrollbar(
+      controller: _scrollCtrl,
       thumbVisibility: true,
       child: SingleChildScrollView(
+        controller: _scrollCtrl,
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -233,7 +244,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 18),
             _buildWardTitle(wardName: wardName, floorLabel: floorLabel),
             const SizedBox(height: 10),
-            _buildRoomGrid(rooms: rooms),
+            RoomsSection(floorStCode: selectedFloorStCode),
           ],
         ),
       ),

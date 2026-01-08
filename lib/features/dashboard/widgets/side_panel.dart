@@ -10,12 +10,18 @@ import 'package:medicalapp/storage_keys.dart';
 
 import 'patient_list_card.dart';
 import 'dialogs/patient_add_dialog.dart';
+import 'dialogs/patient_edit_dialog.dart';
 import 'side_panel_action_button.dart';
 
 enum PatientTab { all, danger, warning, stable }
 
 class SidePanel extends StatefulWidget {
-  const SidePanel({super.key});
+  final int? floorStCode;
+
+  const SidePanel({
+    super.key,
+    required this.floorStCode,
+  });
 
   @override
   State<SidePanel> createState() => _SidePanelState();
@@ -23,22 +29,16 @@ class SidePanel extends StatefulWidget {
 
 class _SidePanelState extends State<SidePanel> {
   static const _storage = FlutterSecureStorage();
-
-
-
   final ScrollController _scrollCtrl = ScrollController();
 
   late final String _front_url;
 
   bool _isLoading = true;
 
-  // ✅ 현재 선택된 층(스토리지에서 읽음)
-  int? selectedFloorStCode;
-
   // ✅ 층별 환자 목록(명세2)
   List<FloorPatientItem> _allPatients = [];
 
-  // ✅ UI 상태(Provider 대신 State)
+  // ✅ UI 상태
   PatientTab _tab = PatientTab.all;
   int? _selectedPatientCode;
 
@@ -46,7 +46,21 @@ class _SidePanelState extends State<SidePanel> {
   void initState() {
     super.initState();
     _front_url = Urlconfig.serverUrl.toString();
-    loadData();
+    loadData(); // 최초 로딩
+  }
+
+  @override
+  void didUpdateWidget(covariant SidePanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // ✅ 층이 바뀌면: 선택/탭 초기화 + 재조회
+    if (oldWidget.floorStCode != widget.floorStCode) {
+      setState(() {
+        _tab = PatientTab.all;
+        _selectedPatientCode = null;
+      });
+      loadData();
+    }
   }
 
   @override
@@ -58,25 +72,29 @@ class _SidePanelState extends State<SidePanel> {
   Future<void> loadData() async {
     setState(() => _isLoading = true);
     await getData();
+    if (!mounted) return;
     setState(() => _isLoading = false);
   }
 
-  /// ✅ storage + http로 층별 환자 목록 가져오기 (명세2)
+  /// ✅ widget.floorStCode로 조회 (storage 읽기 X)
   Future<void> getData() async {
-    // 1) 선택 층 코드 읽기
-    final floorStCodeStr = await _storage.read(key: StorageKeys.selectedFloorStCode);
-    final floorStCode = int.tryParse((floorStCodeStr ?? '').trim());
-    selectedFloorStCode = floorStCode;
+    final floorStCode = widget.floorStCode;
 
     if (floorStCode == null) {
-      // 층 선택이 아직 없으면 빈 목록
       _allPatients = [];
       return;
     }
 
-    // 2) 층별 환자 목록 조회
+    // (선택) 다른 화면에서 필요하면 storage도 최신으로 유지
+    await _storage.write(
+      key: StorageKeys.selectedFloorStCode,
+      value: floorStCode.toString(),
+    );
+
     try {
-      final uri = Uri.parse('$_front_url/api/hospital/structure/patient-list?hospital_st_code=$floorStCode');
+      final uri = Uri.parse(
+        '$_front_url/api/hospital/structure/patient-list?hospital_st_code=$floorStCode',
+      );
       final res = await http.get(uri, headers: {'Content-Type': 'application/json'});
 
       debugPrint('[PATIENT_LIST] status=${res.statusCode}');
@@ -92,7 +110,6 @@ class _SidePanelState extends State<SidePanel> {
         _allPatients = [];
         return;
       }
-
       if (decoded['code'] != 1) {
         _allPatients = [];
         return;
@@ -161,7 +178,6 @@ class _SidePanelState extends State<SidePanel> {
       ),
       child: Column(
         children: [
-          // 상단: 환자목록 + 총 인원 + 추가 버튼
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
             child: Row(
@@ -178,8 +194,6 @@ class _SidePanelState extends State<SidePanel> {
                   ],
                 ),
                 const Spacer(),
-
-                // ✅ 환자 추가 버튼 유지
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF22C55E),
@@ -193,9 +207,8 @@ class _SidePanelState extends State<SidePanel> {
                       context: context,
                       builder: (_) => const PatientAddDialog(),
                     );
-
                     if (ok == true) {
-                      await loadData();
+                      await loadData(); // ✅ 추가 후 재조회 유지
                     }
                   },
                   icon: const Icon(Icons.add),
@@ -205,7 +218,6 @@ class _SidePanelState extends State<SidePanel> {
             ),
           ),
 
-          // 탭(전체/위험/주의/안전)
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
             child: _Tabs(
@@ -214,7 +226,6 @@ class _SidePanelState extends State<SidePanel> {
             ),
           ),
 
-          // 리스트 스크롤
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -233,14 +244,25 @@ class _SidePanelState extends State<SidePanel> {
                     selected: _selectedPatientCode == p.patientCode,
                     onTap: () async {
                       setState(() => _selectedPatientCode = p.patientCode);
+
+                      final ok = await showDialog<bool>(
+                        context: context,
+                        builder: (_) => PatientEditDialog(
+                          patientCode: p.patientCode,
+                          fromBedCode: 0,
+                          onRefresh: loadData,
+                        ),
+                      );
+                      if (ok == true) {
+                        await loadData(); // 수정 후 사이드패널 재조회
                       }
+                    },
                   );
                 },
               ),
             ),
           ),
 
-          // 하단 고정 버튼
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 18),
             child: Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -252,7 +274,7 @@ class _SidePanelState extends State<SidePanel> {
             child: SidePanelActionButton(
               label: '병동 선택',
               icon: Icons.apartment_rounded,
-              onTap: () async{
+              onTap: () async {
                 final storage = FlutterSecureStorage();
                 await storage.delete(key: 'selected_ward_json');
                 await storage.delete(key: StorageKeys.selectedWardStCode);
@@ -270,6 +292,7 @@ class _SidePanelState extends State<SidePanel> {
     );
   }
 }
+
 
 class _Tabs extends StatelessWidget {
   final PatientTab tab;

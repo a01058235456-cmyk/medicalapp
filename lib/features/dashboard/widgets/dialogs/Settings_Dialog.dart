@@ -9,12 +9,12 @@ import 'package:medicalapp/urlConfig.dart';
 import 'package:medicalapp/storage_keys.dart';
 
 enum SettingsSection {
-  accountInfo,   // 회원정보
-  password,      // 비밀번호 변경
-  withdraw,      // 회원 탈퇴
-  mySettings,    // 내 설정
-  systemInfo,    // 시스템 정보
-  wardManage,    // 병동 관리
+  accountInfo, // 회원정보
+  password, // 비밀번호 변경
+  withdraw, // 회원 탈퇴
+  mySettings, // 내 설정
+  systemInfo, // 시스템 정보
+  wardManage, // 병동 관리
 }
 
 class SettingsDialog extends StatefulWidget {
@@ -60,10 +60,30 @@ class _SettingsDialogState extends State<SettingsDialog> {
     super.dispose();
   }
 
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// ✅ 공통 헤더 (Authorization 포함)
+  Future<Map<String, String>> _headers() async {
+    final token = await _storage.read(key: 'access_token');
+    // ignore: avoid_print
+    print('TOKEN is null? ${token == null} / len=${token?.length}');
+    return {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      if (token != null && token.trim().isNotEmpty) 'Authorization': 'Bearer ${token.trim()}',
+    };
+  }
+
   Future<void> loadData() async {
-    setState(() => _loading = true);
-    await getData();
-    setState(() => _loading = false);
+    if (mounted) setState(() => _loading = true);
+    try {
+      await getData();
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<void> getData() async {
@@ -84,10 +104,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Future<Map<String, dynamic>?> _getJson(Uri uri) async {
-    final res = await http.get(uri, headers: {'Content-Type': 'application/json'});
-    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    final res = await http.get(uri, headers: await _headers());
+
+    // ignore: avoid_print
+    print('[GET] $uri -> ${res.statusCode}');
+    // ignore: avoid_print
+    print('RES: ${res.body}');
+
     final decoded = jsonDecode(res.body);
     if (decoded is! Map<String, dynamic>) return null;
+    if (res.statusCode < 200 || res.statusCode >= 300) return decoded; // 메시지 확인용
     return decoded;
   }
 
@@ -97,27 +123,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
         Map<String, dynamic>? body,
       }) async {
     final req = http.Request(method, uri);
-    req.headers['Content-Type'] = 'application/json';
+    req.headers.addAll(await _headers());
+
     if (body != null) {
       req.body = jsonEncode(body);
     }
+
     final streamed = await req.send();
     final res = await http.Response.fromStream(streamed);
-    if (res.statusCode < 200 || res.statusCode >= 300) return null;
-    final decoded = jsonDecode(res.body);
-    if (decoded is! Map<String, dynamic>) return null;
-    return decoded;
-  }
 
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    // ✅ 실패 원인 확인용 로그
+    // ignore: avoid_print
+    print('[$method] $uri -> ${res.statusCode}');
+    // ignore: avoid_print
+    print('REQ: ${req.body}');
+    // ignore: avoid_print
+    print('RES: ${res.body}');
+
   }
 
   Future<void> _logout() async {
     if (!mounted) return;
 
-    // 필요하면 여기서 저장된 키들 정리
     await _storage.delete(key: StorageKeys.selectedWardStCode);
     await _storage.delete(key: StorageKeys.selectedWardName);
     await _storage.delete(key: StorageKeys.selectedFloorStCode);
@@ -139,11 +166,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final decoded = await _getJson(uri);
     if (decoded == null) return;
 
-    if (decoded['code'] != 1) return;
+    if (decoded['code'] != 1) {
+      // ignore: avoid_print
+      print('accountInfo code!=1: ${decoded['message']}');
+      return;
+    }
 
     final data = decoded['data'];
     if (data is! Map<String, dynamic>) return;
 
+    if (!mounted) return;
     setState(() {
       _hospitalId = (data['hospital_id']?.toString() ?? '').trim();
       _hospitalName = (data['hospital_name']?.toString() ?? '').trim();
@@ -153,25 +185,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> _loadWards() async {
     final code = _hospitalCode;
     if (code == null) {
-      setState(() => _wards = []);
+      if (mounted) setState(() => _wards = []);
       return;
     }
 
-    setState(() => _wardsLoading = true);
+    if (mounted) setState(() => _wardsLoading = true);
 
-    // 병동 목록 조회(이 엔드포인트는 이전에 사용하던 명세 기준)
-    // /api/hospital/structure/part?hospital_code=1
     final uri = Uri.parse('$_baseUrl/api/hospital/structure/part?hospital_code=$code');
     final decoded = await _getJson(uri);
 
     if (decoded == null || decoded['code'] != 1) {
-      setState(() => _wardsLoading = false);
+      if (mounted) setState(() => _wardsLoading = false);
       return;
     }
 
     final data = decoded['data'];
     if (data is! Map<String, dynamic>) {
-      setState(() => _wardsLoading = false);
+      if (mounted) setState(() => _wardsLoading = false);
       return;
     }
 
@@ -187,9 +217,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
       list.add(_WardItem(hospitalStCode: st, categoryName: name, sortOrder: sort));
     }
 
-    // sort_order 기준 정렬
     list.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 
+    if (!mounted) return;
     setState(() {
       _wards = list;
       _wardsLoading = false;
@@ -209,7 +239,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       return;
     }
 
-    setState(() => _pwSaving = true);
+    if (mounted) setState(() => _pwSaving = true);
 
     try {
       final uri = Uri.parse('$_baseUrl/api/auth/email/update');
@@ -244,15 +274,54 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('회원 탈퇴', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text('정말 탈퇴하시겠습니까?\n탈퇴 후에는 계정을 복구할 수 없습니다.'),
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFFFF),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        elevation: 2,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+        title: const Text(
+          '회원 탈퇴',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 18,
+            color: Color(0xFF111827),
+          ),
+        ),
+        content: const Text(
+          '정말 탈퇴하시겠습니까?\n탈퇴 후에는 계정을 복구할 수 없습니다.',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 14,
+            color: Color(0xFF374151),
+            height: 1.35,
+          ),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF374151),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444), // 위험 작업: 빨강
+              foregroundColor: Colors.white,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
             child: const Text('탈퇴'),
           ),
         ],
@@ -271,7 +340,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
     if (decoded['code'] == 1) {
       _snack('탈퇴가 완료되었습니다.');
-      // 키 정리 후 로그인 화면
       await _storage.deleteAll();
       if (!mounted) return;
       Navigator.pop(context);
@@ -292,9 +360,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
     final uri = Uri.parse('$_baseUrl/api/hospital/structure/update');
 
-    // 명세에 hopital_st_code 오타가 있어 둘 다 보내서 안전하게 처리
     final decoded = await _sendJson('PUT', uri, body: {
-      'hopital_st_code': w.hospitalStCode,
+      'hopital_st_code': w.hospitalStCode, // 오타 명세 대응
       'hospital_st_code': w.hospitalStCode,
       'category_name': nextName,
     });
@@ -315,13 +382,52 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('병동 삭제', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: Text('정말 "${w.categoryName}" 병동을 삭제하시겠습니까?'),
+        backgroundColor: const Color(0xFFFFFFFF),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        elevation: 2,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+        title: const Text(
+          '병동 삭제',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 18,
+            color: Color(0xFF111827),
+          ),
+        ),
+        content: Text(
+          '정말 "${w.categoryName}" 병동을 삭제하시겠습니까?',
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 14,
+            color: Color(0xFF374151),
+            height: 1.35,
+          ),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444), foregroundColor: Colors.white),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF374151),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444), // 위험 작업: 빨강
+              foregroundColor: Colors.white,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('삭제'),
           ),
@@ -378,7 +484,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ),
             ),
             const Divider(height: 1),
-
             Expanded(
               child: Row(
                 children: [
@@ -415,11 +520,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           selected: _section == SettingsSection.withdraw,
                           onTap: () => setState(() => _section = SettingsSection.withdraw),
                         ),
-
                         const SizedBox(height: 10),
                         const Divider(height: 1),
                         const SizedBox(height: 10),
-
                         const _MenuTitle('병동 관리'),
                         _MenuItem(
                           title: '병동 관리',
@@ -430,11 +533,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             await loadData();
                           },
                         ),
-
                         const SizedBox(height: 10),
                         const Divider(height: 1),
                         const SizedBox(height: 10),
-
                         const _MenuTitle('내 설정'),
                         _MenuItem(
                           title: '내 설정',
@@ -442,11 +543,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           selected: _section == SettingsSection.mySettings,
                           onTap: () => setState(() => _section = SettingsSection.mySettings),
                         ),
-
                         const SizedBox(height: 10),
                         const Divider(height: 1),
                         const SizedBox(height: 10),
-
                         const _MenuTitle('시스템 정보'),
                         _MenuItem(
                           title: '앱 버전',
@@ -457,14 +556,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                   ),
-
                   // 우측 내용
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(18),
-                      child: _loading
-                          ? const Center(child: CircularProgressIndicator())
-                          : _buildContent(),
+                      child: _loading ? const Center(child: CircularProgressIndicator()) : _buildContent(),
                     ),
                   ),
                 ],
@@ -488,20 +584,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
             final ok = await showDialog<bool>(
               context: context,
               builder: (_) => AlertDialog(
-                backgroundColor: const Color(0xFFFFFFFF), // ✅ 화이트 톤
-                surfaceTintColor: Colors.transparent,     // ✅ 머티리얼 틴트 제거(색 변형 방지)
+                backgroundColor: const Color(0xFFFFFFFF),
+                surfaceTintColor: Colors.transparent,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
-                  side: const BorderSide(color: Color(0xFFE5E7EB)), // ✅ 얇은 테두리
+                  side: const BorderSide(color: Color(0xFFE5E7EB)),
                 ),
                 elevation: 2,
-
-                // ✅ 기본 padding(전체 여백)
                 insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
                 contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
                 actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-
                 title: const Text(
                   '로그아웃',
                   style: TextStyle(
@@ -510,7 +603,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     color: Color(0xFF111827),
                   ),
                 ),
-
                 content: const Text(
                   '로그아웃 하시겠습니까?',
                   style: TextStyle(
@@ -520,7 +612,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     height: 1.35,
                   ),
                 ),
-
                 actions: [
                   TextButton(
                     style: TextButton.styleFrom(
@@ -533,7 +624,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   ),
                   FilledButton(
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF22C55E), // ✅ 그린 포인트(기존 톤)
+                      backgroundColor: const Color(0xFF22C55E),
                       foregroundColor: Colors.white,
                       textStyle: const TextStyle(fontWeight: FontWeight.w900),
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -543,8 +634,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     child: const Text('로그아웃'),
                   ),
                 ],
-              )
+              ),
             );
+
             if (ok == true) await _logout();
           },
         );
@@ -618,8 +710,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 }
 
-
-
 /* -------------------- 병동 관리(병동 추가 버튼 삭제 버전) -------------------- */
 
 class _WardManageView extends StatelessWidget {
@@ -648,17 +738,15 @@ class _WardManageView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            children: [
-              const Text(
+            children: const [
+              Text(
                 '병동 목록을 관리합니다.',
                 style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w700),
               ),
-              const Spacer(),
+              Spacer(),
             ],
           ),
           const SizedBox(height: 14),
-          const SizedBox(height: 14),
-
           Expanded(
             child: () {
               if (hospitalCode == null) {
@@ -695,7 +783,6 @@ class _WardManageView extends StatelessWidget {
                             style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF111827)),
                           ),
                         ),
-
                         IconButton(
                           tooltip: '이름 수정',
                           icon: const Icon(Icons.edit_outlined),
@@ -858,13 +945,13 @@ class _AccountInfoView extends StatelessWidget {
                   const storage = FlutterSecureStorage();
 
                   await storage.delete(key: 'hospital_code');
-                  await storage.delete(key: 'selected_ward_json'); // 로그인에서 쓰던 키(있으면 삭제)
+                  await storage.delete(key: 'selected_ward_json');
                   await storage.delete(key: StorageKeys.selectedWardStCode);
                   await storage.delete(key: StorageKeys.selectedWardName);
                   await storage.delete(key: StorageKeys.selectedFloorStCode);
                   await storage.delete(key: StorageKeys.floorLabel);
 
-                  await onLogout(); // 기존 로그아웃(이동/스낵바 등)
+                  await onLogout();
                 },
               ),
             ],
