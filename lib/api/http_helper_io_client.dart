@@ -1,39 +1,18 @@
+import 'dart:io';
+
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
-class CookieClient extends http.BaseClient {
-  final http.Client _inner;
-  final Map<String, String> _jar = {}; // name -> value
+/// ✅ IO(안드로이드 태블릿/윈도우/맥):
+/// dart:io HttpClient는 "같은 인스턴스"를 쓰는 동안
+/// Set-Cookie 받은 세션 쿠키를 메모리에 저장하고, 다음 요청에 자동 전송합니다.
+http.Client createHttpClient() {
+  final io = HttpClient();
 
-  CookieClient([http.Client? inner]) : _inner = inner ?? http.Client();
+  // 로컬 개발 시 self-signed 인증서 쓰면 필요할 수 있음(HTTP면 상관없음)
+  // io.badCertificateCallback = (X509Certificate cert, String host, int port) => true;
 
-  @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    if (_jar.isNotEmpty) {
-      request.headers['Cookie'] = _jar.entries.map((e) => '${e.key}=${e.value}').join('; ');
-    }
+  io.autoUncompress = true;
 
-    final res = await _inner.send(request);
-
-    final setCookie = res.headers['set-cookie'];
-    if (setCookie != null && setCookie.isNotEmpty) {
-      _storeSetCookie(setCookie);
-    }
-
-    return res;
-  }
-
-  void _storeSetCookie(String raw) {
-    final first = raw.split(';').first; // "connect.sid=...."
-    final idx = first.indexOf('=');
-    if (idx <= 0) return;
-    final name = first.substring(0, idx).trim();
-    final value = first.substring(idx + 1).trim();
-    if (name.isEmpty) return;
-    _jar[name] = value;
-  }
-
-  @override
-  void close() => _inner.close();
+  return IOClient(io);
 }
-
-http.Client createHttpClient() => CookieClient();

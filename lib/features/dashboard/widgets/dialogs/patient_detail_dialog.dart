@@ -35,17 +35,24 @@ class PatientDetailDialog extends ConsumerStatefulWidget {
 class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   static const _storage = FlutterSecureStorage();
 
-  late final String _baseUrl;
+  late final String  _front_url;
 
   bool _loading = true;
   bool _deleting = false;
 
   PatientProfileDto? _profile; // ✅ GET /api/patient/profile 결과
 
+  // ✅ 측정값(그래프 + 상단 값)
+  List<MeasurementBasicDto> _measurements = const [];
+
+  // ✅ 명세: /api/measurement/basic?device_code=...&patient_code=...
+  // 현재 구조/UI 안건드리기 위해 기본 1
+  int _deviceCode = 1;
+
   @override
   void initState() {
     super.initState();
-    _baseUrl = Urlconfig.serverUrl.toString();
+    _front_url = Urlconfig.serverUrl.toString();
     loadData();
   }
 
@@ -76,6 +83,31 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
 
   Future<void> getData() async {
     _profile = await _fetchPatientProfile(widget.patientCode);
+
+    // ✅ 명세 API 요청 (device_code + patient_code)
+    _measurements = await _fetchMeasurementBasic(
+      deviceCode: _deviceCode,
+      patientCode: widget.patientCode,
+    );
+
+    // ✅ 응답 항목에 device_code가 있으니, 서버가 실제 값을 내려주면 내부 값만 갱신(UI/구조 변화 없음)
+    if (_measurements.isNotEmpty) {
+      _deviceCode = _measurements.last.deviceCode;
+    }
+  }
+
+  MeasurementBasicDto? get _latestMeasurement {
+    if (_measurements.isEmpty) return null;
+    return _measurements.last;
+  }
+
+  String _vitalValueOrDash({
+    required double? value,
+    required String unit,
+    required int frac,
+  }) {
+    if (value == null) return '-';
+    return '${value.toStringAsFixed(frac)}$unit';
   }
 
   // =========================
@@ -84,7 +116,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
 
   /// GET /api/patient/profile?patient_code=1
   Future<PatientProfileDto> _fetchPatientProfile(int patientCode) async {
-    final uri = Uri.parse('$_baseUrl/api/patient/profile?patient_code=$patientCode');
+    final uri = Uri.parse('$_front_url/api/patient/profile?patient_code=$patientCode');
     final res = await http.get(uri, headers: await _headers());
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -101,9 +133,35 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     return PatientProfileDto.fromJson(data);
   }
 
+  /// GET /api/measurement/basic?device_code=1&patient_code=1
+  Future<List<MeasurementBasicDto>> _fetchMeasurementBasic({
+    required int deviceCode,
+    required int patientCode,
+  }) async {
+    final uri = Uri.parse('$_front_url/api/measurement/basic?device_code=$deviceCode&patient_code=$patientCode');
+    final res = await http.get(uri, headers: await _headers());
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('측정값 조회 실패(HTTP ${res.statusCode})');
+    }
+
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map<String, dynamic>) throw Exception('측정값 조회 응답 형식 오류');
+    if (decoded['code'] != 1) throw Exception((decoded['message'] ?? '측정값 조회 실패').toString());
+
+    final data = decoded['data'];
+    if (data is! List) throw Exception('측정값 조회 data 형식 오류');
+
+    final list = data.whereType<Map<String, dynamic>>().map(MeasurementBasicDto.fromJson).toList();
+
+    // 시간순 정렬(오름차순)
+    list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return list;
+  }
+
   /// DELETE /api/patient/profile/delete/{patient_code}
   Future<void> _deletePatient(int patientCode) async {
-    final uri = Uri.parse('$_baseUrl/api/patient/profile/delete/$patientCode');
+    final uri = Uri.parse('$_front_url/api/patient/profile/delete/$patientCode');
     final res = await http.delete(uri, headers: await _headers());
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -125,7 +183,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     // ✅ UI가 "호실 ${roomNo} · 침대 ${bedNo}"로 고정이라,
     // roomNo/bedNo는 최대한 짧게(숫자) 만들어야 ... 방지됨
     final roomNo = _compactRoom(widget.roomLabel ?? '');
-    final bedNo  = _compactBed(widget.bedLabel ?? '', api?.bedCode);
+    final bedNo = _compactBed(widget.bedLabel ?? '', api?.bedCode);
 
     return PatientUi(
       patientCode: widget.patientCode,
@@ -146,18 +204,14 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     final s = raw.trim();
     if (s.isEmpty) return '-';
     final n = _parseDigits(s);
-    // "Room102", "102호" 등 -> "102"
     if (n != null) return n.toString();
-    // 숫자가 없으면 너무 길지 않게만
     return (s.length > 6) ? s.substring(0, 6) : s;
   }
 
   String _compactBed(String raw, int? fallbackBedCode) {
     final s = raw.trim();
     final n = _parseDigits(s);
-    // "Bed-3" -> "3"
     if (n != null) return n.toString();
-    // 라벨이 없으면 bed_code라도 표시
     if (s.isEmpty && fallbackBedCode != null && fallbackBedCode > 0) {
       return fallbackBedCode.toString();
     }
@@ -170,6 +224,89 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     return int.tryParse(m.group(0) ?? '');
   }
 
+  // =========================
+  // ✅ 그래프 시리즈 생성 (10분 간격 30개)
+  // ✅ 더미 완전 제거: 데이터 없으면 points 비워서 "빈 그래프"
+  // =========================
+
+  _ChartSeries _seriesFromMeasurements({
+    required String title,
+    required String unit,
+    required double yMin,
+    required double yMax,
+    required Color lineColor,
+    required Color dotColor,
+    required double Function(MeasurementBasicDto m) pick,
+  }) {
+    final sorted = [..._measurements]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    // ✅ 더미 제거: 데이터 없으면 "빈 그래프"
+    if (sorted.isEmpty) {
+      return _ChartSeries(
+        title: title,
+        unit: unit,
+        points: const <_ChartPoint>[],
+        yMin: yMin,
+        yMax: yMax,
+        lineColor: lineColor,
+        dotColor: dotColor,
+        selectedDotColor: const Color(0xFF34D399),
+      );
+    }
+
+    // 최신 쪽 위주(과도한 데이터 방지)
+    final src = sorted.length > 200 ? sorted.sublist(sorted.length - 200) : sorted;
+
+    const step = Duration(minutes: 10);
+    const stepMs = 10 * 60 * 1000;
+
+    DateTime floorTo10Min(DateTime d) {
+      final m = (d.minute ~/ 10) * 10;
+      return DateTime(d.year, d.month, d.day, d.hour, m);
+    }
+
+    // 끝 시간을 10분 단위로 맞춤
+    final end = floorTo10Min(src.last.createdAt);
+    final start = end.subtract(step * 29);
+
+    // 10분 버킷 key -> 그 구간의 "마지막 값"
+    final bucket = <int, double>{};
+    for (final m in src) {
+      final t = floorTo10Min(m.createdAt);
+      final key = t.millisecondsSinceEpoch ~/ stepMs;
+      bucket[key] = pick(m); // 같은 버킷이면 마지막 값으로 덮어씀
+    }
+
+    // 초기값: start 이전 가장 가까운 값(없으면 첫 값)
+    double cur = pick(src.first);
+    for (final m in src) {
+      if (m.createdAt.isBefore(start) || m.createdAt.isAtSameMomentAs(start)) {
+        cur = pick(m);
+      } else {
+        break;
+      }
+    }
+
+    final pts = <_ChartPoint>[];
+    for (int i = 0; i < 30; i++) {
+      final t = start.add(step * i);
+      final key = t.millisecondsSinceEpoch ~/ stepMs;
+      if (bucket.containsKey(key)) cur = bucket[key]!;
+      final v = cur.clamp(yMin, yMax).toDouble();
+      pts.add(_ChartPoint(t, v));
+    }
+
+    return _ChartSeries(
+      title: title,
+      unit: unit,
+      points: pts,
+      yMin: yMin,
+      yMax: yMax,
+      lineColor: lineColor,
+      dotColor: dotColor,
+      selectedDotColor: const Color(0xFF34D399),
+    );
+  }
 
   // =========================
   // Actions
@@ -263,59 +400,45 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     }
 
     final p = _ui;
+    final latest = _latestMeasurement;
 
-    // =======================================================
-    // [TEMP VITALS] ✅ 임시 더미 바이탈 (vitalsProvider 삭제로 대체)
-    // - 실시간 바이탈 붙이면 아래 1줄만 실제 데이터로 교체
-    // - 그리고 파일 하단 [TEMP VITALS START~END] 블록 삭제
-    // =======================================================
-    final v = _TempVitals.mock(seed: widget.patientCode);
-    // =======================================================
+    // ✅ 상단 텍스트(체온/병실온도/습도)도 API 최신값으로
+    final bodyTempText = _vitalValueOrDash(value: latest?.bodyTemperature, unit: '°C', frac: 1);
+    final roomTempText = _vitalValueOrDash(value: latest?.temperature, unit: ' °C', frac: 1);
+    final humidText = _vitalValueOrDash(value: latest?.humidity, unit: '%', frac: 0);
 
-    // ✅ 그래프용 더미 데이터(3개) (UI/차트 로직 그대로)
-    final bodyTempSeries = _ChartSeries.dummy(
-      seed: widget.patientCode.hashCode ^ 0xA11CE,
+    // ✅ 움직임은 명세 API가 없으므로 더미 없이 표시만 '-' 처리
+    const movementText = '-';
+
+    // ✅ 그래프 데이터: 명세 API 기반 (10분 간격 30개, 데이터 없으면 빈 그래프)
+    final bodyTempSeries = _seriesFromMeasurements(
       title: '체온',
       unit: '°C',
-      base: 36.7,
-      amp: 0.6,
-      noise: 0.18,
-      minClamp: 35.5,
-      maxClamp: 39.5,
       yMin: 35,
       yMax: 40,
       lineColor: const Color(0xFFEF4444),
       dotColor: const Color(0xFFB91C1C),
+      pick: (m) => m.bodyTemperature,
     );
 
-    final roomTempSeries = _ChartSeries.dummy(
-      seed: widget.patientCode.hashCode ^ 0xBEEF,
+    final roomTempSeries = _seriesFromMeasurements(
       title: '병실온도',
       unit: '°C',
-      base: 24.0,
-      amp: 2.2,
-      noise: 0.6,
-      minClamp: 18,
-      maxClamp: 30,
       yMin: 16,
       yMax: 32,
       lineColor: const Color(0xFF06B6D4),
       dotColor: const Color(0xFF0284C7),
+      pick: (m) => m.temperature,
     );
 
-    final humiditySeries = _ChartSeries.dummy(
-      seed: widget.patientCode.hashCode ^ 0xC0FFEE,
+    final humiditySeries = _seriesFromMeasurements(
       title: '습도',
       unit: '%',
-      base: 48.0,
-      amp: 18.0,
-      noise: 3.2,
-      minClamp: 20,
-      maxClamp: 85,
       yMin: 0,
       yMax: 100,
       lineColor: const Color(0xFF3B82F6),
       dotColor: const Color(0xFF1D4ED8),
+      pick: (m) => m.humidity,
     );
 
     return Dialog(
@@ -409,7 +532,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                         Expanded(
                           child: _VitalMiniCard(
                             title: '체온',
-                            value: '${v.bodytemp.toStringAsFixed(1)}°C',
+                            value: bodyTempText,
                             icon: Icons.thermostat_outlined,
                             iconColor: const Color(0xFF2563EB),
                           ),
@@ -418,7 +541,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                         Expanded(
                           child: _VitalMiniCard(
                             title: '병실온도',
-                            value: '${v.roomtemp.toStringAsFixed(1)} °C',
+                            value: roomTempText,
                             icon: Icons.thermostat_outlined,
                             iconColor: const Color(0xFFDC2626),
                           ),
@@ -427,7 +550,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                         Expanded(
                           child: _VitalMiniCard(
                             title: '습도',
-                            value: '${v.humidity.toStringAsFixed(0)}%',
+                            value: humidText,
                             icon: Icons.water_drop_outlined,
                             iconColor: const Color(0xFF0EA5E9),
                           ),
@@ -436,7 +559,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                         Expanded(
                           child: _VitalMiniCard(
                             title: '움직임',
-                            value: '${v.movement.label} ',
+                            value: movementText,
                             icon: Icons.accessibility_new_outlined,
                             iconColor: const Color(0xFF7C3AED),
                           ),
@@ -551,6 +674,50 @@ class PatientProfileDto {
       significant: j['significant']?.toString(),
       note: j['note']?.toString(),
       description: j['description']?.toString(),
+    );
+  }
+}
+
+// ✅ /api/measurement/basic 명세 그대로 매핑
+class MeasurementBasicDto {
+  final int measurementCode;
+  final int deviceCode;
+  final int patientCode;
+  final double temperature;      // 병실온도
+  final double bodyTemperature;  // 체온
+  final double humidity;         // 습도
+  final DateTime createdAt;      // create_at
+
+  const MeasurementBasicDto({
+    required this.measurementCode,
+    required this.deviceCode,
+    required this.patientCode,
+    required this.temperature,
+    required this.bodyTemperature,
+    required this.humidity,
+    required this.createdAt,
+  });
+
+  factory MeasurementBasicDto.fromJson(Map<String, dynamic> j) {
+    int _i(dynamic v) => int.tryParse(v?.toString() ?? '') ?? 0;
+    double _d(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0.0;
+
+    final rawTime = (j['create_at'] ?? '').toString();
+    DateTime parsed;
+    try {
+      parsed = DateTime.parse(rawTime);
+    } catch (_) {
+      parsed = DateTime.now();
+    }
+
+    return MeasurementBasicDto(
+      measurementCode: _i(j['measurement_code']),
+      deviceCode: _i(j['device_code']),
+      patientCode: _i(j['patient_code']),
+      temperature: _d(j['temperature']),
+      bodyTemperature: _d(j['body_temperature']),
+      humidity: _d(j['humidity']),
+      createdAt: parsed,
     );
   }
 }
@@ -796,7 +963,7 @@ class _GraphCard extends StatelessWidget {
 }
 
 // =========================
-// 차트 (원본 그대로)
+// 차트 (원본 그대로 + x축 시간표시 HH:mm)
 // =========================
 
 class _ChartPoint {
@@ -827,47 +994,6 @@ class _ChartSeries {
     required this.dotColor,
     required this.selectedDotColor,
   });
-
-  static _ChartSeries dummy({
-    required int seed,
-    required String title,
-    required String unit,
-    required double base,
-    required double amp,
-    required double noise,
-    required double minClamp,
-    required double maxClamp,
-    required double yMin,
-    required double yMax,
-    int count = 30,
-    required Color lineColor,
-    Color? dotColor,
-    Color selectedDotColor = const Color(0xFF34D399),
-  }) {
-    final r = Random(seed);
-    final now = DateTime.now();
-    final pts = <_ChartPoint>[];
-
-    for (int i = 0; i < count; i++) {
-      final t = now.subtract(Duration(hours: (count - 1) - i));
-      final wave = sin(i / 4.0) * amp;
-      final n = (r.nextDouble() * 2 - 1) * noise;
-      var v = base + wave + n;
-      v = v.clamp(minClamp, maxClamp).toDouble();
-      pts.add(_ChartPoint(t, v));
-    }
-
-    return _ChartSeries(
-      title: title,
-      unit: unit,
-      points: pts,
-      yMin: yMin,
-      yMax: yMax,
-      lineColor: lineColor,
-      dotColor: dotColor ?? lineColor,
-      selectedDotColor: selectedDotColor,
-    );
-  }
 }
 
 class _StaticLineChart extends StatelessWidget {
@@ -998,6 +1124,7 @@ class _LineChartPainter extends CustomPainter {
       canvas.drawLine(Offset(plot.left, y), Offset(plot.right, y), gridPaint);
     }
 
+    // y축 값
     final tp = TextPainter(textDirection: TextDirection.ltr);
     for (int i = 0; i <= 2; i++) {
       final t = i / 2.0;
@@ -1011,13 +1138,17 @@ class _LineChartPainter extends CustomPainter {
       tp.paint(canvas, Offset(6, y - tp.height / 2));
     }
 
+    // x축 시간(HH:mm)
     final n = series.points.length;
     if (n >= 2) {
-      final step = max(1, (n / 10).round());
+      final targetLabels = 6;
+      final step = max(1, ((n - 1) / (targetLabels - 1)).round());
+
       for (int i = 0; i < n; i += step) {
         final x = plot.left + plot.width * (i / (n - 1));
         final d = series.points[i].t;
-        final label = d.day.toString().padLeft(2, '0');
+        final label = '${_fmt2(d.hour)}:${_fmt2(d.minute)}';
+
         tp.text = TextSpan(
           text: label,
           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: axisText),
@@ -1027,6 +1158,7 @@ class _LineChartPainter extends CustomPainter {
       }
     }
 
+    // 선/점 (데이터 없으면 안그려짐)
     Offset ptToXY(int i) {
       final v = series.points[i].v;
       final t = i / (n - 1);
@@ -1037,43 +1169,45 @@ class _LineChartPainter extends CustomPainter {
       return Offset(x, y);
     }
 
-    final path = Path();
-    final p0 = ptToXY(0);
-    path.moveTo(p0.dx, p0.dy);
+    if (n >= 2) {
+      final path = Path();
+      final p0 = ptToXY(0);
+      path.moveTo(p0.dx, p0.dy);
 
-    for (int i = 1; i < n - 1; i++) {
-      final p1 = ptToXY(i);
-      final p2 = ptToXY(i + 1);
-      final mid = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
-      path.quadraticBezierTo(p1.dx, p1.dy, mid.dx, mid.dy);
-    }
-    final pn = ptToXY(n - 1);
-    path.lineTo(pn.dx, pn.dy);
+      for (int i = 1; i < n - 1; i++) {
+        final p1 = ptToXY(i);
+        final p2 = ptToXY(i + 1);
+        final mid = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
+        path.quadraticBezierTo(p1.dx, p1.dy, mid.dx, mid.dy);
+      }
+      final pn = ptToXY(n - 1);
+      path.lineTo(pn.dx, pn.dy);
 
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = series.lineColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..strokeCap = StrokeCap.round,
-    );
-
-    for (int i = 0; i < n; i++) {
-      final p = ptToXY(i);
-      final isSel = selectedIndex == i;
-      canvas.drawCircle(p, isSel ? 6 : 4.2, Paint()..color = series.dotColor);
-      canvas.drawCircle(
-        p,
-        isSel ? 6 : 4.2,
+      canvas.drawPath(
+        path,
         Paint()
-          ..color = Colors.white
+          ..color = series.lineColor
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2,
+          ..strokeWidth = 3
+          ..strokeCap = StrokeCap.round,
       );
+
+      for (int i = 0; i < n; i++) {
+        final p = ptToXY(i);
+        final isSel = selectedIndex == i;
+        canvas.drawCircle(p, isSel ? 6 : 4.2, Paint()..color = series.dotColor);
+        canvas.drawCircle(
+          p,
+          isSel ? 6 : 4.2,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2,
+        );
+      }
     }
 
-    if (showTooltip && selectedIndex != null && selectedIndex! >= 0 && selectedIndex! < n) {
+    if (showTooltip && selectedIndex != null && n >= 2 && selectedIndex! >= 0 && selectedIndex! < n) {
       final idx = selectedIndex!;
       final p = ptToXY(idx);
       final t = series.points[idx].t;
@@ -1180,60 +1314,3 @@ String _fmt2(int n) => n.toString().padLeft(2, '0');
 String _fmtDateTime(DateTime t) {
   return '${t.year}-${_fmt2(t.month)}-${_fmt2(t.day)} ${_fmt2(t.hour)}:${_fmt2(t.minute)}:${_fmt2(t.second)}';
 }
-
-// ======================================================================
-// [TEMP VITALS START] ✅ 임시 더미 바이탈 (vitalsProvider 제거로 인한 대체)
-// - 실시간 바이탈 API/소켓/센서 연동하면 이 블록 전체 삭제하세요.
-// - 그리고 build()의 `final v = ...` 한 줄만 실제 데이터로 교체.
-// ======================================================================
-
-class _TempVitals {
-  final double bodytemp;
-  final double roomtemp;
-  final double humidity;
-  final _TempMovement movement;
-
-  const _TempVitals({
-    required this.bodytemp,
-    required this.roomtemp,
-    required this.humidity,
-    required this.movement,
-  });
-
-  static _TempVitals mock({required int seed}) {
-    final r = Random(seed * 9973);
-
-    double jitter(double base, double range) => base + ((r.nextDouble() * 2 - 1) * range);
-
-    final body = jitter(36.7, 0.4).clamp(35.5, 39.5).toDouble();
-    final room = jitter(24.0, 1.8).clamp(18.0, 30.0).toDouble();
-    final hum = jitter(48.0, 10.0).clamp(20.0, 85.0).toDouble();
-
-    final pick = r.nextInt(3);
-    final mv = (pick == 0)
-        ? _TempMovement.low
-        : (pick == 1)
-        ? _TempMovement.normal
-        : _TempMovement.high;
-
-    return _TempVitals(
-      bodytemp: body,
-      roomtemp: room,
-      humidity: hum,
-      movement: mv,
-    );
-  }
-}
-
-enum _TempMovement {
-  low('낮음'),
-  normal('보통'),
-  high('높음');
-
-  final String label;
-  const _TempMovement(this.label);
-}
-
-// ======================================================================
-// [TEMP VITALS END]
-// ======================================================================

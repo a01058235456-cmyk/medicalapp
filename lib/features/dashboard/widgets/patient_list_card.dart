@@ -97,7 +97,7 @@ class PatientListCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '병상 ${patient.patientRoom} · ${patient.patientBed}',
+                    '병실 ${patient.patientRoom} · ${patient.patientBed}',
                     style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),

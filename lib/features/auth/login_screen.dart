@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http;
+// import 'package:http/http.dart' as http; // ✅ 이제 직접 http를 안 쓰면 지워도 됩니다.
 import 'package:medicalapp/storage_keys.dart';
 import 'package:medicalapp/urlConfig.dart';
+
+// ✅ 쿠키 세션 유지되는 http helper
+import '../../api/http_helper.dart';
 
 /// =======================
 /// Models (간단 모델)
@@ -48,7 +51,6 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   static const _storage = FlutterSecureStorage();
-
 
   // storage keys
   static const _kHospitalCode = 'hospital_code';
@@ -94,20 +96,22 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // 선택 병동이 있으면 바로 대시보드로
       final wardJson = await _storage.read(key: _kSelectedWardJson);
-      if (wardJson != null && wardJson.isNotEmpty) {try {
-        final m = jsonDecode(wardJson);
-        if (m is Map) {
-          final w = WardItem.fromJson(Map<String, dynamic>.from(m));
-          await _storage.write(key: StorageKeys.selectedWardStCode, value: w.hospitalStCode.toString());
-          await _storage.write(key: StorageKeys.selectedWardName, value: w.categoryName);
-        }
-      } catch (_) {}
+      if (wardJson != null && wardJson.isNotEmpty) {
+        try {
+          final m = jsonDecode(wardJson);
+          if (m is Map) {
+            final w = WardItem.fromJson(Map<String, dynamic>.from(m));
+            await _storage.write(
+                key: StorageKeys.selectedWardStCode, value: w.hospitalStCode.toString());
+            await _storage.write(key: StorageKeys.selectedWardName, value: w.categoryName);
+          }
+        } catch (_) {}
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        context.go('/dashboard');
-      });
-      return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          context.go('/dashboard');
+        });
+        return;
       }
 
       if (hospitalCode != null) {
@@ -134,17 +138,9 @@ class _LoginScreenState extends State<LoginScreen> {
       });
 
       final uri = Uri.parse('$_front_url/api/hospital/structure/part?hospital_code=$hospitalCode');
-      final res = await http.get(uri);
 
-      debugPrint('[WARDS] status=${res.statusCode}');
-      debugPrint('[WARDS] body=${res.body}');
-
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw Exception('병동 조회 실패(HTTP ${res.statusCode})');
-      }
-
-      final decoded = jsonDecode(res.body);
-      if (decoded is! Map) throw Exception('병동 조회 응답 형식 오류');
+      // ✅ 변경: http.get -> HttpHelper.getJson (쿠키 세션 클라이언트 사용)
+      final decoded = await HttpHelper.getJson(uri);
 
       final ok = decoded['code'] == 1;
       if (!ok) throw Exception((decoded['message'] ?? '병동 조회 실패').toString());
@@ -208,24 +204,11 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final uri = Uri.parse('$_front_url/api/auth/login');
 
-      final res = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'hospital_id': id,
-          'hospital_password': pw,
-        }),
-      );
-
-      debugPrint('[LOGIN] status=${res.statusCode}');
-      debugPrint('[LOGIN] body=${res.body}');
-
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw Exception('로그인 실패(HTTP ${res.statusCode})');
-      }
-
-      final decoded = jsonDecode(res.body);
-      if (decoded is! Map) throw Exception('로그인 응답 형식 오류');
+      // ✅ 변경: http.post -> HttpHelper.postJson (쿠키 세션 클라이언트 사용)
+      final decoded = await HttpHelper.postJson(uri, {
+        'hospital_id': id,
+        'hospital_password': pw,
+      });
 
       final ok = decoded['code'] == 1;
       if (!ok) {
@@ -556,8 +539,6 @@ class _WardButtonsState extends State<_WardButtons> {
       );
     }
 
-    // ✅ 병동 없을 때 UI 없이 넘어가는 건 상위(getData)에서 처리됨
-    // 여기서는 그냥 빈 Column 반환
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

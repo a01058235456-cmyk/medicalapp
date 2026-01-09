@@ -3,10 +3,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http;
 
 import 'package:medicalapp/urlConfig.dart';
 import 'package:medicalapp/storage_keys.dart';
+
+// ✅ 쿠키 세션 유지되는 http helper
+import '../../../../api/http_helper.dart';
 
 enum SettingsSection {
   accountInfo, // 회원정보
@@ -65,18 +67,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  /// ✅ 공통 헤더 (Authorization 포함)
-  Future<Map<String, String>> _headers() async {
-    final token = await _storage.read(key: 'access_token');
-    // ignore: avoid_print
-    print('TOKEN is null? ${token == null} / len=${token?.length}');
-    return {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      if (token != null && token.trim().isNotEmpty) 'Authorization': 'Bearer ${token.trim()}',
-    };
-  }
-
   Future<void> loadData() async {
     if (mounted) setState(() => _loading = true);
     try {
@@ -103,43 +93,50 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
+  /// ✅ 쿠키 세션 기반 GET (HttpHelper 사용)
   Future<Map<String, dynamic>?> _getJson(Uri uri) async {
-    final res = await http.get(uri, headers: await _headers());
+    try {
+      final decoded = await HttpHelper.getJsonAllowError(uri);
 
-    // ignore: avoid_print
-    print('[GET] $uri -> ${res.statusCode}');
-    // ignore: avoid_print
-    print('RES: ${res.body}');
+      // ignore: avoid_print
+      print('[GET] $uri -> ok');
+      // ignore: avoid_print
+      print('RES: ${jsonEncode(decoded)}');
 
-    final decoded = jsonDecode(res.body);
-    if (decoded is! Map<String, dynamic>) return null;
-    if (res.statusCode < 200 || res.statusCode >= 300) return decoded; // 메시지 확인용
-    return decoded;
+      return decoded;
+    } catch (e) {
+      // ignore: avoid_print
+      print('[GET] $uri -> error: $e');
+      return null;
+    }
   }
 
+  /// ✅ 쿠키 세션 기반 PUT/DELETE/... (HttpHelper 사용)
   Future<Map<String, dynamic>?> _sendJson(
       String method,
       Uri uri, {
         Map<String, dynamic>? body,
       }) async {
-    final req = http.Request(method, uri);
-    req.headers.addAll(await _headers());
+    try {
+      final decoded = await HttpHelper.sendJsonAllowError(
+        method,
+        uri,
+        body: body,
+      );
 
-    if (body != null) {
-      req.body = jsonEncode(body);
+      // ignore: avoid_print
+      print('[$method] $uri -> ok');
+      // ignore: avoid_print
+      print('REQ: ${body == null ? '' : jsonEncode(body)}');
+      // ignore: avoid_print
+      print('RES: ${jsonEncode(decoded)}');
+
+      return decoded;
+    } catch (e) {
+      // ignore: avoid_print
+      print('[$method] $uri -> error: $e');
+      return null;
     }
-
-    final streamed = await req.send();
-    final res = await http.Response.fromStream(streamed);
-
-    // ✅ 실패 원인 확인용 로그
-    // ignore: avoid_print
-    print('[$method] $uri -> ${res.statusCode}');
-    // ignore: avoid_print
-    print('REQ: ${req.body}');
-    // ignore: avoid_print
-    print('RES: ${res.body}');
-
   }
 
   Future<void> _logout() async {
@@ -315,7 +312,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444), // 위험 작업: 빨강
+              backgroundColor: const Color(0xFFEF4444),
               foregroundColor: Colors.white,
               textStyle: const TextStyle(fontWeight: FontWeight.w900),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -361,7 +358,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final uri = Uri.parse('$_baseUrl/api/hospital/structure/update');
 
     final decoded = await _sendJson('PUT', uri, body: {
-      'hopital_st_code': w.hospitalStCode, // 오타 명세 대응
+      'hopital_st_code': w.hospitalStCode,
       'hospital_st_code': w.hospitalStCode,
       'category_name': nextName,
     });
@@ -422,7 +419,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444), // 위험 작업: 빨강
+              backgroundColor: const Color(0xFFEF4444),
               foregroundColor: Colors.white,
               textStyle: const TextStyle(fontWeight: FontWeight.w900),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -854,7 +851,9 @@ class _MenuItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = selected ? const Color(0xFFF3F4F6) : Colors.transparent;
-    final fg = danger ? const Color(0xFFEF4444) : (selected ? const Color(0xFF111827) : const Color(0xFF374151));
+    final fg = danger
+        ? const Color(0xFFEF4444)
+        : (selected ? const Color(0xFF111827) : const Color(0xFF374151));
 
     return InkWell(
       onTap: onTap,
