@@ -4,5 +4,6 @@ class StorageKeys {
   static const selectedWardName = 'selected_ward_name'; // 선택한 병동 이름
   static const selectedFloorStCode = 'selected_floor_st_code';  // 선택한 층 hospital_st_code 저장
   static const floorLabel = 'floor_label'; // 층 이름 저장
+  static const selectedPatientCode = 'selected_patient_code'; // 선택한 환자 코드
 }
 

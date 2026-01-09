@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -42,38 +43,85 @@ class _SidePanelState extends State<SidePanel> {
   PatientTab _tab = PatientTab.all;
   int? _selectedPatientCode;
 
+  // ✅ 자동 재조회(폴링)
+  Timer? _pollTimer;
+  bool _refreshing = false;
+
+  // 원하는 주기만 바꾸면 됩니다 (예: 5초, 10초, 30초 등)
+  static const Duration _pollInterval = Duration(seconds: 10000);
+
   @override
   void initState() {
     super.initState();
     _front_url = Urlconfig.serverUrl.toString();
     loadData(); // 최초 로딩
+    _startPolling();
   }
 
   @override
   void didUpdateWidget(covariant SidePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // ✅ 층이 바뀌면: 선택/탭 초기화 + 재조회
+    // ✅ 층이 바뀌면: 선택/탭 초기화 + 재조회 + 폴링 재시작
     if (oldWidget.floorStCode != widget.floorStCode) {
       setState(() {
         _tab = PatientTab.all;
         _selectedPatientCode = null;
       });
+
       loadData();
+      _restartPolling();
     }
   }
 
   @override
   void dispose() {
+    _stopPolling();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> loadData() async {
-    setState(() => _isLoading = true);
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_pollInterval, (_) async {
+      // 폴링은 UI 로딩 스피너 깜빡이지 않게 silent로
+      await loadData(silent: true);
+    });
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  void _restartPolling() {
+    _stopPolling();
+    _startPolling();
+  }
+
+  Future<void> loadData({bool silent = false}) async {
+    if (_refreshing) return; // 중복 호출 방지
+    _refreshing = true;
+
+    if (!silent && mounted) {
+      setState(() => _isLoading = true);
+    }
+
     await getData();
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+
+    if (!mounted) {
+      _refreshing = false;
+      return;
+    }
+
+    if (!silent) {
+      setState(() => _isLoading = false);
+    } else {
+      // silent라도 데이터는 새로 반영되어야 하므로 build 트리거
+      setState(() {});
+    }
+
+    _refreshing = false;
   }
 
   /// ✅ widget.floorStCode로 조회 (storage 읽기 X)
@@ -141,12 +189,18 @@ class _SidePanelState extends State<SidePanel> {
             patientName: name.isEmpty ? '이름없음' : name,
             patientRoom: room.isEmpty ? '-' : room,
             patientBed: bed.isEmpty ? '-' : bed,
-            patientWarning: warn,
+            patientWarning: warn, // ✅ 0=안전, 1=경고, 2=위험 (아이콘 색은 PatientListCard에서 매핑)
           ));
         }
       }
 
       _allPatients = list;
+
+      // 선택 환자가 사라졌으면 선택 해제 (조용히 정리)
+      if (_selectedPatientCode != null &&
+          !_allPatients.any((e) => e.patientCode == _selectedPatientCode)) {
+        _selectedPatientCode = null;
+      }
     } catch (e) {
       debugPrint('[PATIENT_LIST] error=$e');
       _allPatients = [];
@@ -217,7 +271,6 @@ class _SidePanelState extends State<SidePanel> {
               ],
             ),
           ),
-
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
             child: _Tabs(
@@ -225,7 +278,6 @@ class _SidePanelState extends State<SidePanel> {
               onChanged: (t) => setState(() => _tab = t),
             ),
           ),
-
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -262,13 +314,11 @@ class _SidePanelState extends State<SidePanel> {
               ),
             ),
           ),
-
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 18),
             child: Divider(height: 1, color: Color(0xFFE5E7EB)),
           ),
           const SizedBox(height: 12),
-
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
             child: SidePanelActionButton(
@@ -292,7 +342,6 @@ class _SidePanelState extends State<SidePanel> {
     );
   }
 }
-
 
 class _Tabs extends StatelessWidget {
   final PatientTab tab;

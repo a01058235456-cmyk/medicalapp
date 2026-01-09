@@ -15,7 +15,7 @@ class PatientDetailDialog extends ConsumerStatefulWidget {
 
   /// UI 표시용(호실/침대 라벨) - room_card에서 넘기면 기존 UI 그대로 표현 가능
   final String? roomLabel; // 예: "101호"
-  final String? bedLabel;  // 예: "Bed-1"
+  final String? bedLabel; // 예: "Bed-1"
 
   /// 필요하면 부모 새로고침 연결
   final Future<void> Function()? onRefresh;
@@ -35,7 +35,7 @@ class PatientDetailDialog extends ConsumerStatefulWidget {
 class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   static const _storage = FlutterSecureStorage();
 
-  late final String  _front_url;
+  late final String _front_url;
 
   bool _loading = true;
   bool _deleting = false;
@@ -46,7 +46,6 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   List<MeasurementBasicDto> _measurements = const [];
 
   // ✅ 명세: /api/measurement/basic?device_code=...&patient_code=...
-  // 현재 구조/UI 안건드리기 위해 기본 1
   int _deviceCode = 1;
 
   @override
@@ -81,16 +80,34 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     }
   }
 
+  /// ✅ StorageKeys/selected_patient_code 완전 제거 버전
+  /// - patientCode는 widget.patientCode만 사용
+  /// - deviceCode는 profile의 device_code로 세팅
   Future<void> getData() async {
-    _profile = await _fetchPatientProfile(widget.patientCode);
+    final patientCode = widget.patientCode;
 
-    // ✅ 명세 API 요청 (device_code + patient_code)
+    // 다이얼로그가 patientCode 없이 열리면 표시 불가
+    if (patientCode <= 0) {
+      _profile = null;
+      _measurements = const [];
+      return;
+    }
+
+    // 1) 프로필 먼저 조회 (여기서 device_code 얻음)
+    _profile = await _fetchPatientProfile(patientCode);
+
+    final dc = _profile?.deviceCode;
+    if (dc != null && dc > 0) {
+      _deviceCode = dc;
+    }
+
+    // 2) 측정값 조회 (없으면 빈 리스트 반환하도록 처리)
     _measurements = await _fetchMeasurementBasic(
       deviceCode: _deviceCode,
-      patientCode: widget.patientCode,
+      patientCode: patientCode,
     );
 
-    // ✅ 응답 항목에 device_code가 있으니, 서버가 실제 값을 내려주면 내부 값만 갱신(UI/구조 변화 없음)
+    // 서버가 응답 항목에 device_code를 내려주면 내부 값 갱신(구조/UI 변화 없음)
     if (_measurements.isNotEmpty) {
       _deviceCode = _measurements.last.deviceCode;
     }
@@ -133,28 +150,62 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     return PatientProfileDto.fromJson(data);
   }
 
+  /// baseUrl에 /api 포함/미포함 섞여도 안전하게 합치기
+  String _apiUrl(String pathAndQuery) {
+    final base = _front_url.trim().replaceAll(RegExp(r'/+$'), ''); // 끝 / 제거
+    final p = pathAndQuery.startsWith('/') ? pathAndQuery : '/$pathAndQuery';
+
+    // base가 .../api 로 끝나고, p가 /api/... 로 시작하면 /api 중복 제거
+    if (base.toLowerCase().endsWith('/api') && p.toLowerCase().startsWith('/api/')) {
+      return base + p.substring(4); // '/api' 제거
+    }
+    return base + p;
+  }
+
   /// GET /api/measurement/basic?device_code=1&patient_code=1
+  /// - 서버가 "측정 데이터 없음"을 404 + {code:-1,...}로 주는 케이스는 빈 리스트로 처리
   Future<List<MeasurementBasicDto>> _fetchMeasurementBasic({
     required int deviceCode,
     required int patientCode,
   }) async {
-    final uri = Uri.parse('$_front_url/api/measurement/basic?device_code=$deviceCode&patient_code=$patientCode');
+    final url = _apiUrl('/api/measurement/basic?device_code=$deviceCode&patient_code=$patientCode');
+    final uri = Uri.parse(url);
+
+    debugPrint('[MEASUREMENT] GET $uri');
     final res = await http.get(uri, headers: await _headers());
+    debugPrint('[MEASUREMENT] status=${res.statusCode} body=${res.body}');
+
+    // ✅ 측정 데이터 없음(서버가 404로 주는 경우) => 에러로 치지 않고 빈 값 처리
+    if (res.statusCode == 404) {
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map<String, dynamic>) {
+          final code = int.tryParse(decoded['code']?.toString() ?? '');
+          if (code == -1) return const <MeasurementBasicDto>[];
+        }
+      } catch (_) {
+        // body 파싱 실패면 아래에서 일반 에러 처리
+      }
+      throw Exception('측정값 조회 실패(HTTP 404)\n$uri');
+    }
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw Exception('측정값 조회 실패(HTTP ${res.statusCode})');
+      throw Exception('측정값 조회 실패(HTTP ${res.statusCode})\n$uri');
     }
 
     final decoded = jsonDecode(res.body);
     if (decoded is! Map<String, dynamic>) throw Exception('측정값 조회 응답 형식 오류');
-    if (decoded['code'] != 1) throw Exception((decoded['message'] ?? '측정값 조회 실패').toString());
+    if (decoded['code'] != 1) {
+      // code=-1 등도 여기로 올 수 있으니, 측정없음은 빈 리스트로 처리(HTTP 200으로 내려오는 경우 대비)
+      final c = int.tryParse(decoded['code']?.toString() ?? '');
+      if (c == -1) return const <MeasurementBasicDto>[];
+      throw Exception((decoded['message'] ?? '측정값 조회 실패').toString());
+    }
 
     final data = decoded['data'];
     if (data is! List) throw Exception('측정값 조회 data 형식 오류');
 
     final list = data.whereType<Map<String, dynamic>>().map(MeasurementBasicDto.fromJson).toList();
-
-    // 시간순 정렬(오름차순)
     list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return list;
   }
@@ -635,6 +686,10 @@ class PatientProfileDto {
   final int? age;
   final String? birthDate;
   final int? bedCode;
+
+  /// ✅ 명세 추가: device_code
+  final int? deviceCode;
+
   final String? nurse;
   final String? doctor;
   final String? diagnosis;
@@ -650,6 +705,7 @@ class PatientProfileDto {
     this.age,
     this.birthDate,
     this.bedCode,
+    this.deviceCode,
     this.nurse,
     this.doctor,
     this.diagnosis,
@@ -667,6 +723,7 @@ class PatientProfileDto {
       age: int.tryParse(j['age']?.toString() ?? ''),
       birthDate: j['birth_date']?.toString(),
       bedCode: int.tryParse(j['bed_code']?.toString() ?? ''),
+      deviceCode: int.tryParse(j['device_code']?.toString() ?? ''), // ✅ 추가
       nurse: j['nurse']?.toString(),
       doctor: j['doctor']?.toString(),
       diagnosis: j['diagnosis']?.toString(),
@@ -683,10 +740,10 @@ class MeasurementBasicDto {
   final int measurementCode;
   final int deviceCode;
   final int patientCode;
-  final double temperature;      // 병실온도
-  final double bodyTemperature;  // 체온
-  final double humidity;         // 습도
-  final DateTime createdAt;      // create_at
+  final double temperature; // 병실온도
+  final double bodyTemperature; // 체온
+  final double humidity; // 습도
+  final DateTime createdAt; // create_at
 
   const MeasurementBasicDto({
     required this.measurementCode,

@@ -400,6 +400,31 @@ class _PatientAddDialogState extends State<PatientAddDialog> {
                   initialDate: birthDate ?? DateTime(now.year - 30, 1, 1),
                   firstDate: DateTime(1900, 1, 1),
                   lastDate: now,
+                  builder: (context, child) {
+                    final base = Theme.of(context);
+                    final cs = base.colorScheme;
+
+                    return Theme(
+                      data: base.copyWith(
+                        // ✅ (선택) 틴트/머터리얼3 느낌 줄이고 싶으면 켜세요
+                        // useMaterial3: false,
+
+                        colorScheme: cs.copyWith(
+                          primary: _cGreen, // 포인트 그린
+                          onPrimary: Colors.white,
+                          surface: Colors.white,
+                          onSurface: _cText,
+                        ),
+                        textButtonTheme: TextButtonThemeData(
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF374151),
+                            textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      ),
+                      child: child ?? const SizedBox.shrink(),
+                    );
+                  },
                 );
                 if (picked == null) return;
                 setState(() {
@@ -448,8 +473,18 @@ class _PatientAddDialogState extends State<PatientAddDialog> {
                 child: DropdownButtonFormField<int>(
                   value: selectedBedCode,
                   items: bedItems,
-                  decoration: _inputDeco(),
+
                   onChanged: (v) => setState(() => selectedBedCode = v),
+
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6B7280)),
+                style: const TextStyle(
+                color: Color(0xFF111827),
+                fontWeight: FontWeight.w800,
+                ),
+
+                decoration: _inputDeco(),
                 ),
               ),
         ],
@@ -674,6 +709,13 @@ class _Dropdown<T> extends StatelessWidget {
           onChanged(v);
         },
         decoration: _inputDeco(),
+        dropdownColor: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6B7280)),
+        style: const TextStyle(
+          color: Color(0xFF111827),
+          fontWeight: FontWeight.w800,
+      ),
       ),
     );
   }

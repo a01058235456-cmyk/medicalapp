@@ -61,6 +61,13 @@ class PatientListCard extends StatelessWidget {
     required this.onTap,
   });
 
+  Color _warnColor(int v) {
+    // 0=안전(초록), 1=경고(주황), 2=위험(빨강)
+    if (v == 2) return const Color(0xFFEF4444);
+    if (v == 1) return const Color(0xFFF59E0B);
+    return const Color(0xFF22C55E);
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = patient.status;
