@@ -34,6 +34,12 @@ class _PatientAddDialogState extends State<PatientAddDialog> {
   static const _cSubText = Color(0xFF6B7280);
   static const _cGreen = Color(0xFF22C55E);
 
+  // ✅ 드롭다운/달력 톤 보조
+  static const _cGreenSoft = Color(0xFFECFDF5); // 연한 그린
+  static const _cGray900 = Color(0xFF111827);
+  static const _cGray700 = Color(0xFF374151);
+  static const _cGray500 = Color(0xFF6B7280);
+
   String get _baseUrl => Urlconfig.serverUrl;
 
   // =========================
@@ -221,7 +227,7 @@ class _PatientAddDialogState extends State<PatientAddDialog> {
     final doctor = doctorCtrl.text.trim();
     final nurse = nurseCtrl.text.trim();
     final allergy = allergyCtrl.text.trim();
-    final significant = significantCtrl.text.trim();
+    final significant = significantCtrl.text.trim(); // ✅ 원래대로 (기능 유지)
     final bedCode = selectedBedCode;
 
     // 기존 동작 유지(검증 항목/문구)
@@ -404,22 +410,56 @@ class _PatientAddDialogState extends State<PatientAddDialog> {
                     final base = Theme.of(context);
                     final cs = base.colorScheme;
 
+                    // ✅ 달력 스타일(화이트톤 + 라운드 + 그린 포인트)
                     return Theme(
                       data: base.copyWith(
-                        // ✅ (선택) 틴트/머터리얼3 느낌 줄이고 싶으면 켜세요
-                        // useMaterial3: false,
-
                         colorScheme: cs.copyWith(
-                          primary: _cGreen, // 포인트 그린
+                          primary: _cGreen,
                           onPrimary: Colors.white,
                           surface: Colors.white,
                           onSurface: _cText,
                         ),
+                        dialogBackgroundColor: Colors.white,
                         textButtonTheme: TextButtonThemeData(
                           style: TextButton.styleFrom(
-                            foregroundColor: const Color(0xFF374151),
+                            foregroundColor: _cGray700,
                             textStyle: const TextStyle(fontWeight: FontWeight.w900),
                           ),
+                        ),
+                        datePickerTheme: DatePickerThemeData(
+                          backgroundColor: Colors.white,
+                          surfaceTintColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                          dividerColor: _cBorder,
+
+                          headerBackgroundColor: _cGreen,
+                          headerForegroundColor: Colors.white,
+
+                          weekdayStyle: const TextStyle(fontWeight: FontWeight.w900, color: _cSubText),
+                          dayStyle: const TextStyle(fontWeight: FontWeight.w900, color: _cText),
+
+                          todayForegroundColor: MaterialStateProperty.all(_cGreen),
+                          todayBorder: BorderSide(color: _cGreen.withOpacity(0.35), width: 1),
+
+                          dayForegroundColor: MaterialStateProperty.resolveWith((states) {
+                            if (states.contains(MaterialState.selected)) return Colors.white;
+                            return _cText;
+                          }),
+                          dayBackgroundColor: MaterialStateProperty.resolveWith((states) {
+                            if (states.contains(MaterialState.selected)) return _cGreen;
+                            if (states.contains(MaterialState.pressed) || states.contains(MaterialState.hovered)) {
+                              return _cGreenSoft;
+                            }
+                            return Colors.transparent;
+                          }),
+                          dayOverlayColor: MaterialStateProperty.resolveWith((states) {
+                            if (states.contains(MaterialState.pressed) ||
+                                states.contains(MaterialState.hovered) ||
+                                states.contains(MaterialState.focused)) {
+                              return _cGreen.withOpacity(0.10);
+                            }
+                            return Colors.transparent;
+                          }),
                         ),
                       ),
                       child: child ?? const SizedBox.shrink(),
@@ -470,21 +510,30 @@ class _PatientAddDialogState extends State<PatientAddDialog> {
               _FieldShell(
                 label: '침대',
                 requiredMark: true,
-                child: DropdownButtonFormField<int>(
-                  value: selectedBedCode,
-                  items: bedItems,
+                child: Theme(
+                  // ✅ 드롭다운 펼쳤을 때 hover/press 느낌(화이트+그린)
+                  data: Theme.of(context).copyWith(
+                    splashColor: _cGreen.withOpacity(0.10),
+                    highlightColor: _cGreen.withOpacity(0.10),
+                    hoverColor: _cGreenSoft,
+                    focusColor: _cGreenSoft,
+                  ),
+                  child: DropdownButtonFormField<int>(
+                    value: selectedBedCode,
+                    items: bedItems,
+                    onChanged: (v) => setState(() => selectedBedCode = v),
 
-                  onChanged: (v) => setState(() => selectedBedCode = v),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6B7280)),
+                    style: const TextStyle(
+                      color: Color(0xFF111827),
+                      fontWeight: FontWeight.w800,
+                    ),
 
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6B7280)),
-                style: const TextStyle(
-                color: Color(0xFF111827),
-                fontWeight: FontWeight.w800,
-                ),
-
-                decoration: _inputDeco(),
+                    // ✅ 드롭다운 필드 포커스 보더만 그린 포인트
+                    decoration: _dropdownDeco(),
+                  ),
                 ),
               ),
         ],
@@ -690,32 +739,44 @@ class _Dropdown<T> extends StatelessWidget {
     this.requiredMark = false,
   });
 
+  static const _cGreen = Color(0xFF22C55E);
+  static const _cGreenSoft = Color(0xFFECFDF5);
+
   @override
   Widget build(BuildContext context) {
     return _FieldShell(
       label: label,
       requiredMark: requiredMark,
-      child: DropdownButtonFormField<T>(
-        value: value,
-        items: [
-          for (final it in items)
-            DropdownMenuItem(
-              value: it,
-              child: Text(it.toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
-            ),
-        ],
-        onChanged: (v) {
-          if (v == null) return;
-          onChanged(v);
-        },
-        decoration: _inputDeco(),
-        dropdownColor: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6B7280)),
-        style: const TextStyle(
-          color: Color(0xFF111827),
-          fontWeight: FontWeight.w800,
-      ),
+      child: Theme(
+        // ✅ 성별 드롭다운도 펼쳤을 때 원하는 톤 적용
+        data: Theme.of(context).copyWith(
+          splashColor: _cGreen.withOpacity(0.10),
+          highlightColor: _cGreen.withOpacity(0.10),
+          hoverColor: _cGreenSoft,
+          focusColor: _cGreenSoft,
+        ),
+        child: DropdownButtonFormField<T>(
+          value: value,
+          items: [
+            for (final it in items)
+              DropdownMenuItem(
+                value: it,
+                child: Text(it.toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
+              ),
+          ],
+          onChanged: (v) {
+            if (v == null) return;
+            onChanged(v);
+          },
+          decoration: _dropdownDeco(),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6B7280)),
+          style: const TextStyle(
+            color: Color(0xFF111827),
+            fontWeight: FontWeight.w800,
+          ),
+        ),
       ),
     );
   }
@@ -767,6 +828,25 @@ InputDecoration _inputDeco({Widget? suffix}) {
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(14),
       borderSide: const BorderSide(color: Color(0xFF93C5FD), width: 2),
+    ),
+  );
+}
+
+// ✅ 드롭다운 전용(포커스 보더만 그린 포인트)
+InputDecoration _dropdownDeco({Widget? suffix}) {
+  return InputDecoration(
+    filled: true,
+    fillColor: Colors.white,
+    isDense: true,
+    suffixIcon: suffix,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: Color(0xFF22C55E), width: 2),
     ),
   );
 }
