@@ -1,4 +1,5 @@
 // patient_detail_dialog.dart
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -7,8 +8,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+// ✅ Bluetooth 추가
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 import 'package:medicalapp/urlConfig.dart';
 import 'patient_edit_dialog.dart';
+
+class _BlePacket {
+  final int deviceCode;
+  final double temperature;
+  final double humidity;
+  final double bodyTemperature;
+  final List<int> weights; // 4개
+
+  _BlePacket({
+    required this.deviceCode,
+    required this.temperature,
+    required this.humidity,
+    required this.bodyTemperature,
+    required this.weights,
+  });
+}
 
 class PatientDetailDialog extends ConsumerStatefulWidget {
   final int patientCode;
@@ -48,11 +69,35 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   // ✅ 명세: /api/measurement/basic?device_code=...&patient_code=...
   int _deviceCode = 1;
 
+  // ✅ (추가) warning state: /api/patient/warning?patient_code=...
+  int? _warningState; // 0 안전, 1 주의, 2 위험
+
+  // =========================================================
+  // ✅ Bluetooth 상태/연결 로직 (추가된 부분)
+  // =========================================================
+  BluetoothDevice? _connectedDevice;
+  BluetoothCharacteristic? _writeChar;
+  BluetoothCharacteristic? _notifyChar;
+
+  bool _isConnectingBle = false;
+  String _connectionStatus = '연결 안됨';
+  List<int> _latestBleData = [];
+
+  StreamSubscription<BluetoothConnectionState>? _connSub;
+
+  // ✅ BLE 수신값 POST 디바운스(너무 자주 POST/GET 방지)
+  Timer? _blePostDebounce;
+  bool _bleAutoPostEnabled = true;
+  // =========================================================
+
   @override
   void initState() {
     super.initState();
     _front_url = Urlconfig.serverUrl.toString();
     loadData();
+
+    // ✅ 권한 요청 (추가)
+    _checkBluetoothPermissions();
   }
 
   void _snack(String msg) {
@@ -90,6 +135,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     if (patientCode <= 0) {
       _profile = null;
       _measurements = const [];
+      _warningState = null;
       return;
     }
 
@@ -101,7 +147,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
       _deviceCode = dc;
     }
 
-    // 2) 측정값 조회 (없으면 빈 리스트 반환하도록 처리)
+    // 2) 측정값 조회
     _measurements = await _fetchMeasurementBasic(
       deviceCode: _deviceCode,
       patientCode: patientCode,
@@ -111,6 +157,9 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     if (_measurements.isNotEmpty) {
       _deviceCode = _measurements.last.deviceCode;
     }
+
+    // 3) ✅ (추가) warning 상태 조회 -> 움직임 라벨에 사용
+    _warningState = await _fetchPatientWarningState(patientCode);
   }
 
   MeasurementBasicDto? get _latestMeasurement {
@@ -136,6 +185,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     final uri = Uri.parse('$_front_url/api/patient/profile?patient_code=$patientCode');
     final res = await http.get(uri, headers: await _headers());
 
+    debugPrint('[PROFILE] status=${res.statusCode} body=${res.body}');
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('환자정보 조회 실패(HTTP ${res.statusCode})');
     }
@@ -146,7 +196,6 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
 
     final data = decoded['data'];
     if (data is! Map<String, dynamic>) throw Exception('환자정보 조회 data 형식 오류');
-
     return PatientProfileDto.fromJson(data);
   }
 
@@ -163,7 +212,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   }
 
   /// GET /api/measurement/basic?device_code=1&patient_code=1
-  /// - 서버가 "측정 데이터 없음"을 404 + {code:-1,...}로 주는 케이스는 빈 리스트로 처리
+  /// - 현재 서버 응답: data: {cursor:"", result:[...]}
   Future<List<MeasurementBasicDto>> _fetchMeasurementBasic({
     required int deviceCode,
     required int patientCode,
@@ -183,9 +232,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
           final code = int.tryParse(decoded['code']?.toString() ?? '');
           if (code == -1) return const <MeasurementBasicDto>[];
         }
-      } catch (_) {
-        // body 파싱 실패면 아래에서 일반 에러 처리
-      }
+      } catch (_) {}
       throw Exception('측정값 조회 실패(HTTP 404)\n$uri');
     }
 
@@ -196,18 +243,40 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     final decoded = jsonDecode(res.body);
     if (decoded is! Map<String, dynamic>) throw Exception('측정값 조회 응답 형식 오류');
     if (decoded['code'] != 1) {
-      // code=-1 등도 여기로 올 수 있으니, 측정없음은 빈 리스트로 처리(HTTP 200으로 내려오는 경우 대비)
       final c = int.tryParse(decoded['code']?.toString() ?? '');
       if (c == -1) return const <MeasurementBasicDto>[];
       throw Exception((decoded['message'] ?? '측정값 조회 실패').toString());
     }
 
     final data = decoded['data'];
-    if (data is! List) throw Exception('측정값 조회 data 형식 오류');
+    if (data is! Map<String, dynamic>) throw Exception('측정값 조회 data 형식 오류');
 
-    final list = data.whereType<Map<String, dynamic>>().map(MeasurementBasicDto.fromJson).toList();
+    final rawList = data['result'];
+    if (rawList is! List) throw Exception('측정값 조회 result 형식 오류');
+
+    final list = rawList.whereType<Map<String, dynamic>>().map(MeasurementBasicDto.fromJson).toList();
     list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return list;
+  }
+
+  /// ✅ (추가) GET /api/patient/warning?patient_code=1
+  Future<int?> _fetchPatientWarningState(int patientCode) async {
+    final uri = Uri.parse('$_front_url/api/patient/warning?patient_code=$patientCode');
+    final res = await http.get(uri, headers: await _headers());
+
+    debugPrint('[WARNING] status=${res.statusCode} body=${res.body}');
+
+    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map<String, dynamic>) return null;
+    if (decoded['code'] != 1) return null;
+
+    final data = decoded['data'];
+    if (data is! Map<String, dynamic>) return null;
+
+    final ws = data['warning_state'];
+    return ws == null ? null : int.tryParse(ws.toString());
   }
 
   /// DELETE /api/patient/profile/delete/{patient_code}
@@ -276,8 +345,9 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   }
 
   // =========================
-  // ✅ 그래프 시리즈 생성 (10분 간격 30개)
-  // ✅ 더미 완전 제거: 데이터 없으면 points 비워서 "빈 그래프"
+  // ✅ 그래프 시리즈 생성
+  // - 기존(기본): 10분 간격 30개 (기존 UI 그대로)
+  // - 전체화면: windowPoints 늘려서 과거 데이터까지(좌우 스크롤)
   // =========================
 
   _ChartSeries _seriesFromMeasurements({
@@ -288,6 +358,11 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     required Color lineColor,
     required Color dotColor,
     required double Function(MeasurementBasicDto m) pick,
+
+    // ✅ 추가(기본값은 기존과 동일) : 구조/기능/기존 그래프 변화 없음
+    int windowPoints = 30,
+    Duration step = const Duration(minutes: 10),
+    int maxSource = 200,
   }) {
     final sorted = [..._measurements]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
@@ -305,25 +380,26 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
       );
     }
 
-    // 최신 쪽 위주(과도한 데이터 방지)
-    final src = sorted.length > 200 ? sorted.sublist(sorted.length - 200) : sorted;
+    // ✅ 최신 쪽 위주(과도한 데이터 방지) - 기본 200, 전체화면은 더 크게 줄 수 있음
+    final src = sorted.length > maxSource ? sorted.sublist(sorted.length - maxSource) : sorted;
 
-    const step = Duration(minutes: 10);
-    const stepMs = 10 * 60 * 1000;
+    final stepMs = step.inMilliseconds;
 
-    DateTime floorTo10Min(DateTime d) {
-      final m = (d.minute ~/ 10) * 10;
+    DateTime floorToStep(DateTime d) {
+      final minutes = step.inMinutes;
+      if (minutes <= 0) return d;
+      final m = (d.minute ~/ minutes) * minutes;
       return DateTime(d.year, d.month, d.day, d.hour, m);
     }
 
-    // 끝 시간을 10분 단위로 맞춤
-    final end = floorTo10Min(src.last.createdAt);
-    final start = end.subtract(step * 29);
+    // 끝 시간을 step 단위로 맞춤
+    final end = floorToStep(src.last.createdAt);
+    final start = end.subtract(step * (windowPoints - 1));
 
-    // 10분 버킷 key -> 그 구간의 "마지막 값"
+    // step 버킷 key -> 그 구간의 "마지막 값"
     final bucket = <int, double>{};
     for (final m in src) {
-      final t = floorTo10Min(m.createdAt);
+      final t = floorToStep(m.createdAt);
       final key = t.millisecondsSinceEpoch ~/ stepMs;
       bucket[key] = pick(m); // 같은 버킷이면 마지막 값으로 덮어씀
     }
@@ -339,7 +415,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     }
 
     final pts = <_ChartPoint>[];
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < windowPoints; i++) {
       final t = start.add(step * i);
       final key = t.millisecondsSinceEpoch ~/ stepMs;
       if (bucket.containsKey(key)) cur = bucket[key]!;
@@ -357,6 +433,271 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
       dotColor: dotColor,
       selectedDotColor: const Color(0xFF34D399),
     );
+  }
+
+  // =========================
+  // ✅ Bluetooth (추가된 기능: 버튼/연결/스캔/notify 수신)
+  // =========================
+
+  Future<void> _checkBluetoothPermissions() async {
+    // Android 12+ : bluetoothScan / bluetoothConnect
+    if (await Permission.bluetoothScan.isDenied) {
+      await Permission.bluetoothScan.request();
+    }
+    if (await Permission.bluetoothConnect.isDenied) {
+      await Permission.bluetoothConnect.request();
+    }
+    // 기기/OS에 따라 위치 권한이 필요한 경우가 있어 유지
+    if (await Permission.location.isDenied) {
+      await Permission.location.request();
+    }
+  }
+
+  Future<void> _onBleButtonPressed() async {
+    if (_isConnectingBle) return;
+
+    if (_connectedDevice == null) {
+      await _connectBluetooth();
+    } else {
+      await _disconnectBluetooth();
+    }
+  }
+
+  Future<void> _connectBluetooth() async {
+    setState(() => _isConnectingBle = true);
+
+    try {
+      final isOn = await FlutterBluePlus.isOn;
+      if (!isOn) {
+        _snack('블루투스를 켜주세요');
+        return;
+      }
+
+      // 스캔 다이얼로그
+      final BluetoothDevice? selected = await _showScanningDialog();
+      if (selected == null) return;
+
+      await _connectToDevice(selected);
+    } catch (e) {
+      _snack('블루투스 연결 실패: $e');
+      debugPrint('블루투스 연결 오류: $e');
+    } finally {
+      if (mounted) setState(() => _isConnectingBle = false);
+    }
+  }
+
+  Future<BluetoothDevice?> _showScanningDialog() async {
+    return showDialog<BluetoothDevice>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _ScanningDialog(),
+    );
+  }
+
+  Future<void> _connectToDevice(BluetoothDevice device) async {
+    try {
+      _snack('${device.name.isEmpty ? '기기' : device.name}에 연결 중...');
+
+      // 이미 연결된 상태면 connect가 예외를 낼 수 있어, 안전 처리
+      try {
+        await device.connect(timeout: const Duration(seconds: 10));
+      } catch (_) {
+        // 이미 연결 상태일 수 있음 -> 계속 진행
+      }
+
+      final services = await device.discoverServices();
+      final ok = await _setupCharacteristics(device, services);
+
+      if (!ok) {
+        await device.disconnect();
+        _snack('서비스/특성 설정 실패');
+        return;
+      }
+
+      setState(() {
+        _connectedDevice = device;
+        _connectionStatus = '연결됨 (${device.name.isEmpty ? 'Unknown' : device.name})';
+      });
+
+      _snack('블루투스 연결 성공');
+
+      _monitorConnection(device);
+    } catch (e) {
+      _snack('연결 실패: $e');
+      debugPrint('기기 연결 오류: $e');
+    }
+  }
+
+  Future<bool> _setupCharacteristics(BluetoothDevice device, List<BluetoothService> services) async {
+    try {
+      BluetoothCharacteristic? writeChar;
+      BluetoothCharacteristic? notifyChar;
+
+      for (final s in services) {
+        for (final c in s.characteristics) {
+          if (c.properties.write && writeChar == null) {
+            writeChar = c;
+          }
+          if (c.properties.notify && notifyChar == null) {
+            notifyChar = c;
+            await c.setNotifyValue(true);
+
+            // 수신 리스너
+            c.value.listen((data) {
+              _handleReceivedData(data);
+            });
+          }
+        }
+      }
+
+      debugPrint('쓰기 특성: ${writeChar?.uuid}');
+      debugPrint('알림 특성: ${notifyChar?.uuid}');
+
+      // 저장
+      _writeChar = writeChar;
+      _notifyChar = notifyChar;
+
+      // notify 또는 write 중 하나라도 있으면 연결은 유지 (기기마다 다름)
+      return writeChar != null || notifyChar != null;
+    } catch (e) {
+      debugPrint('특성 설정 오류: $e');
+      return false;
+    }
+  }
+
+  // ===== BLE 패킷 파싱/POST (추가) =====
+
+  _BlePacket? _parseBlePacket(List<int> data) {
+    if (data.length < 8) return null;
+
+    int u8(int i) => data[i] & 0xFF;
+
+    final dc = u8(0);
+
+    // ✅ 스케일(필요 시 여기만 조정)
+    const tempScale = 1.0;
+    const bodyTempScale = 1.0;
+    const humScale = 1.0;
+
+    final temp = u8(1) / tempScale;
+    final hum = u8(2) / humScale;
+    final bodyTemp = u8(3) / bodyTempScale;
+
+    final w1 = u8(4);
+    final w2 = u8(5);
+    final w3 = u8(6);
+    final w4 = u8(7);
+
+    return _BlePacket(
+      deviceCode: dc,
+      temperature: temp.toDouble(),
+      humidity: hum.toDouble(),
+      bodyTemperature: bodyTemp.toDouble(),
+      weights: [w1, w2, w3, w4],
+    );
+  }
+
+  Future<void> _postMeasurementFromBle(_BlePacket p) async {
+    final url = _apiUrl('/api/measurement/basic');
+    final uri = Uri.parse(url);
+
+    final body = {
+      "device_code": p.deviceCode,
+      "measurements": [
+        {
+          "temperature": p.temperature,
+          "body_temperature": p.bodyTemperature,
+          "humidity": p.humidity,
+          "weights": [
+            {"sensor": 1, "value": p.weights[0]},
+            {"sensor": 2, "value": p.weights[1]},
+            {"sensor": 3, "value": p.weights[2]},
+            {"sensor": 4, "value": p.weights[3]},
+          ],
+        }
+      ]
+    };
+
+    debugPrint('[MEASUREMENT][POST] $uri');
+    debugPrint('[MEASUREMENT][POST BODY] ${jsonEncode(body)}');
+
+    final res = await http.post(uri, headers: await _headers(), body: jsonEncode(body));
+    debugPrint('[MEASUREMENT][POST] status=${res.statusCode} body=${res.body}');
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('측정값 저장 실패(HTTP ${res.statusCode})');
+    }
+
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map<String, dynamic>) throw Exception('측정값 저장 응답 형식 오류');
+    if (decoded['code'] != 1) throw Exception((decoded['message'] ?? '측정값 저장 실패').toString());
+  }
+
+  void _handleReceivedData(List<int> data) {
+    if (!mounted) return;
+    setState(() => _latestBleData = data);
+
+    debugPrint('=== BLE 수신 ===');
+    debugPrint('bytes: $data / len=${data.length}');
+    final hex = data.map((b) => (b & 0xFF).toRadixString(16).padLeft(2, '0')).join(' ');
+    debugPrint('hex: $hex');
+
+    final pkt = _parseBlePacket(data);
+    if (pkt == null) {
+      debugPrint('BLE packet too short. need >= 8');
+      return;
+    }
+
+    // ✅ 내부 deviceCode만 갱신(기존 UI/기능 영향 없음)
+    _deviceCode = pkt.deviceCode;
+
+    if (_bleAutoPostEnabled) {
+      _blePostDebounce?.cancel();
+      _blePostDebounce = Timer(const Duration(milliseconds: 600), () async {
+        try {
+          await _postMeasurementFromBle(pkt);
+          if (mounted) await loadData(); // ✅ 기존 UI는 GET 결과로 그대로 갱신
+        } catch (e) {
+          debugPrint('BLE→POST 실패: $e');
+        }
+      });
+    }
+  }
+
+  void _monitorConnection(BluetoothDevice device) {
+    _connSub?.cancel();
+    _connSub = device.connectionState.listen((state) {
+      if (!mounted) return;
+      setState(() {
+        if (state == BluetoothConnectionState.connected) {
+          _connectionStatus = '연결됨 (${device.name.isEmpty ? 'Unknown' : device.name})';
+        } else {
+          _connectionStatus = '연결 끊김';
+          _connectedDevice = null;
+          _writeChar = null;
+          _notifyChar = null;
+        }
+      });
+    });
+  }
+
+  Future<void> _disconnectBluetooth() async {
+    final d = _connectedDevice;
+    if (d == null) return;
+
+    try {
+      await d.disconnect();
+    } catch (_) {}
+
+    if (!mounted) return;
+    setState(() {
+      _connectedDevice = null;
+      _writeChar = null;
+      _notifyChar = null;
+      _connectionStatus = '연결 안됨';
+      _latestBleData = [];
+    });
+    _snack('블루투스 연결이 해제되었습니다');
   }
 
   // =========================
@@ -438,7 +779,8 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
   }
 
   // =========================
-  // Build (✅ UI 그대로)
+  // Build (✅ UI 그대로 + BLE 버튼/상태만 추가)
+  // + ✅ 전체화면 그래프는 좌우 스크롤로 과거 데이터까지
   // =========================
 
   @override
@@ -458,10 +800,22 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     final roomTempText = _vitalValueOrDash(value: latest?.temperature, unit: ' °C', frac: 1);
     final humidText = _vitalValueOrDash(value: latest?.humidity, unit: '%', frac: 0);
 
-    // ✅ 움직임은 명세 API가 없으므로 더미 없이 표시만 '-' 처리
-    const movementText = '-';
+    // ✅ (변경) 움직임 라벨: warning API 기준
+    final ws = _warningState;
+    final movementText = switch (ws) {
+      0 => '안전',
+      1 => '주의',
+      2 => '위험',
+      _ => '-',
+    };
+    final movementColor = switch (ws) {
+      0 => const Color(0xFF22C55E),
+      1 => const Color(0xFFF59E0B),
+      2 => const Color(0xFFEF4444),
+      _ => const Color(0xFF111827),
+    };
 
-    // ✅ 그래프 데이터: 명세 API 기반 (10분 간격 30개, 데이터 없으면 빈 그래프)
+    // ✅ 그래프 데이터(기본 30개, 기존 그대로)
     final bodyTempSeries = _seriesFromMeasurements(
       title: '체온',
       unit: '°C',
@@ -492,6 +846,47 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
       pick: (m) => m.humidity,
     );
 
+    // ✅ 전체화면(과거 데이터 더 보기)용: windowPoints 늘리고, src cap도 크게
+    // - UI/구조 변경 없이 "전체화면에서만" 더 길게 보이도록
+    final bodyTempSeriesFull = _seriesFromMeasurements(
+      title: '체온',
+      unit: '°C',
+      yMin: 35,
+      yMax: 40,
+      lineColor: const Color(0xFFEF4444),
+      dotColor: const Color(0xFFB91C1C),
+      pick: (m) => m.bodyTemperature,
+      windowPoints: 180, // 10분 간격 * 180 = 30시간
+      step: const Duration(minutes: 10),
+      maxSource: 3000,
+    );
+
+    final roomTempSeriesFull = _seriesFromMeasurements(
+      title: '병실온도',
+      unit: '°C',
+      yMin: 16,
+      yMax: 32,
+      lineColor: const Color(0xFF06B6D4),
+      dotColor: const Color(0xFF0284C7),
+      pick: (m) => m.temperature,
+      windowPoints: 180,
+      step: const Duration(minutes: 10),
+      maxSource: 3000,
+    );
+
+    final humiditySeriesFull = _seriesFromMeasurements(
+      title: '습도',
+      unit: '%',
+      yMin: 0,
+      yMax: 100,
+      lineColor: const Color(0xFF3B82F6),
+      dotColor: const Color(0xFF1D4ED8),
+      pick: (m) => m.humidity,
+      windowPoints: 180,
+      step: const Duration(minutes: 10),
+      maxSource: 3000,
+    );
+
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -516,7 +911,57 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                   Text('${p.name} 환자 상세', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                   const SizedBox(width: 10),
 
-                  // ✅ 퇴원 버튼(빨간색) - 명세 DELETE 호출
+                  // ✅ BLE 상태 칩 (추가)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _connectedDevice != null ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _connectedDevice != null ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _connectedDevice != null ? '연결됨' : '연결 안됨',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+
+                  // ✅ BLE 버튼 (추가)
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _connectedDevice == null ? const Color(0xFF2563EB) : const Color(0xFFEF4444),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                    onPressed: _isConnectingBle ? null : _onBleButtonPressed,
+                    icon: _isConnectingBle
+                        ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                        : Icon(_connectedDevice == null ? Icons.bluetooth : Icons.bluetooth_disabled),
+                    label: Text(
+                      _isConnectingBle ? '연결 중...' : (_connectedDevice == null ? '블루투스 연결' : '연결 해제'),
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+
+                  const SizedBox(width: 10),
+
+                  // ✅ 퇴원 버튼(빨간색) - 명세 DELETE 호출 (원본 그대로)
                   OutlinedButton(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFFEF4444),
@@ -572,6 +1017,14 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                         Expanded(child: _InfoCardMedical(p: p)),
                       ],
                     ),
+
+                    // ✅ BLE 연결 상태 텍스트(기능 영향 없는 정보 표시만 추가)
+                    const SizedBox(height: 12),
+                    Text(
+                      '블루투스: $_connectionStatus${_latestBleData.isNotEmpty ? ' · 최신데이터 ${_latestBleData.length}B' : ''}',
+                      style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w800),
+                    ),
+
                     const SizedBox(height: 22),
 
                     const Text('실시간 바이탈 사인', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
@@ -611,6 +1064,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                           child: _VitalMiniCard(
                             title: '움직임',
                             value: movementText,
+                            valueColor: movementColor, // ✅ (추가) 0/1/2 색상
                             icon: Icons.accessibility_new_outlined,
                             iconColor: const Color(0xFF7C3AED),
                           ),
@@ -629,7 +1083,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                             onOpenFull: () => _showChartFullScreen(
                               context,
                               title: '체온 그래프',
-                              series: bodyTempSeries,
+                              series: bodyTempSeriesFull, // ✅ 전체화면은 더 긴 시리즈
                             ),
                             child: _StaticLineChart(series: bodyTempSeries),
                           ),
@@ -641,7 +1095,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                             onOpenFull: () => _showChartFullScreen(
                               context,
                               title: '병실온도 그래프',
-                              series: roomTempSeries,
+                              series: roomTempSeriesFull,
                             ),
                             child: _StaticLineChart(series: roomTempSeries),
                           ),
@@ -657,7 +1111,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
                             onOpenFull: () => _showChartFullScreen(
                               context,
                               title: '습도 그래프',
-                              series: humiditySeries,
+                              series: humiditySeriesFull,
                             ),
                             child: _StaticLineChart(series: humiditySeries),
                           ),
@@ -672,6 +1126,14 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _blePostDebounce?.cancel();
+    _connSub?.cancel();
+    _connectedDevice?.disconnect();
+    super.dispose();
   }
 }
 
@@ -744,6 +1206,7 @@ class MeasurementBasicDto {
   final double bodyTemperature; // 체온
   final double humidity; // 습도
   final DateTime createdAt; // create_at
+  final int? warningState; // (있으면 받음)
 
   const MeasurementBasicDto({
     required this.measurementCode,
@@ -753,6 +1216,7 @@ class MeasurementBasicDto {
     required this.bodyTemperature,
     required this.humidity,
     required this.createdAt,
+    this.warningState,
   });
 
   factory MeasurementBasicDto.fromJson(Map<String, dynamic> j) {
@@ -775,6 +1239,7 @@ class MeasurementBasicDto {
       bodyTemperature: _d(j['body_temperature']),
       humidity: _d(j['humidity']),
       createdAt: parsed,
+      warningState: j['warning_state'] == null ? null : _i(j['warning_state']),
     );
   }
 }
@@ -938,11 +1403,15 @@ class _VitalMiniCard extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
 
+  // ✅ (추가) 값 텍스트 색상만 옵션으로 (기존 사용처 영향 없음)
+  final Color? valueColor;
+
   const _VitalMiniCard({
     required this.title,
     required this.value,
     required this.icon,
     required this.iconColor,
+    this.valueColor,
   });
 
   @override
@@ -964,7 +1433,14 @@ class _VitalMiniCard extends StatelessWidget {
               children: [
                 Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
-                Text(value, style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w900)),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w900,
+                    color: valueColor ?? const Color(0xFF111827),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1313,6 +1789,9 @@ void _showChartFullScreen(BuildContext context, {required String title, required
     context: context,
     barrierColor: const Color(0x99000000),
     builder: (ctx) {
+      // ✅ 좌우 스크롤 폭: 점 개수에 비례해서 넓혀줌 (UI 톤/구성은 그대로)
+      final w = max(1100.0, series.points.length * 18.0 + 120.0);
+
       return Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -1347,7 +1826,23 @@ void _showChartFullScreen(BuildContext context, {required String title, required
                 ],
               ),
               const SizedBox(height: 12),
-              SizedBox(height: 520, child: _InteractiveLineChart(series: series)),
+
+              // ✅ 전체화면 차트: 좌우 스크롤로 과거 데이터까지
+              SizedBox(
+                height: 520,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SizedBox(
+                      width: w,
+                      height: 520,
+                      child: _InteractiveLineChart(series: series),
+                    ),
+                  ),
+                ),
+              ),
+
               const SizedBox(height: 10),
               const Text(
                 '점을 터치 하면 상세 정보가 표시됩니다.',
@@ -1370,4 +1865,361 @@ String _fmt2(int n) => n.toString().padLeft(2, '0');
 
 String _fmtDateTime(DateTime t) {
   return '${t.year}-${_fmt2(t.month)}-${_fmt2(t.day)} ${_fmt2(t.hour)}:${_fmt2(t.minute)}:${_fmt2(t.second)}';
+}
+
+// =========================================================
+// ✅ 실시간 스캔 다이얼로그 (추가된 부분)
+// =========================================================
+
+// 실시간 스캔 다이얼로그 (UI 스타일 개선)
+class _ScanningDialog extends StatefulWidget {
+  @override
+  _ScanningDialogState createState() => _ScanningDialogState();
+}
+
+class _ScanningDialogState extends State<_ScanningDialog> {
+  List<BluetoothDevice> _devices = [];
+  bool _isScanning = true;
+
+  // ✅ 톤 통일(화이트 + 그린 포인트)
+  static const _cBg = Color(0xFFFAFAFA);
+  static const _cCard = Colors.white;
+  static const _cBorder = Color(0xFFE5E7EB);
+  static const _cText = Color(0xFF111827);
+  static const _cSub = Color(0xFF6B7280);
+  static const _cGreen = Color(0xFF22C55E);
+
+  StreamSubscription<List<ScanResult>>? _scanSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _startScanning();
+  }
+
+  @override
+  void dispose() {
+    _scanSub?.cancel();
+    FlutterBluePlus.stopScan();
+    super.dispose();
+  }
+
+  Future<void> _startScanning() async {
+    setState(() {
+      _isScanning = true;
+      _devices.clear();
+    });
+
+    try {
+      _scanSub?.cancel();
+      _scanSub = FlutterBluePlus.scanResults.listen((results) {
+        if (!mounted) return;
+        setState(() {
+          for (final result in results) {
+            if (!_devices.any((d) => d.id == result.device.id)) {
+              _devices.add(result.device);
+            }
+          }
+        });
+      });
+
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+
+      await Future.delayed(const Duration(seconds: 10));
+      if (mounted) setState(() => _isScanning = false);
+    } catch (_) {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      child: Container(
+        width: 560,
+        decoration: BoxDecoration(
+          color: _cBg,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _cBorder, width: 1),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x14000000),
+              blurRadius: 18,
+              offset: Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: _cGreen.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: _cBorder),
+                    ),
+                    child: const Icon(Icons.bluetooth_searching, color: _cGreen),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      '블루투스 기기 선택',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: _cText,
+                      ),
+                    ),
+                  ),
+                  if (_isScanning)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: '닫기',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, color: _cSub),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: _cBorder),
+
+            // Body
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+              child: Column(
+                children: [
+                  // 상태 배너
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: _cBorder),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: _cGreen.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: _cBorder),
+                          ),
+                          child: Icon(
+                            _isScanning ? Icons.search : Icons.check_circle,
+                            size: 16,
+                            color: _cGreen,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _isScanning ? '검색 중입니다...  (${_devices.length}개 발견)' : '검색 완료  (${_devices.length}개)',
+                            style: const TextStyle(
+                              color: _cText,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        if (!_isScanning)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _cGreen,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: const Text(
+                              '완료',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // 목록 컨테이너
+                  Container(
+                    height: 420,
+                    decoration: BoxDecoration(
+                      color: _cCard,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: _cBorder),
+                    ),
+                    child: _devices.isEmpty
+                        ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              _isScanning ? Icons.bluetooth_searching : Icons.bluetooth_disabled,
+                              size: 44,
+                              color: const Color(0xFF9CA3AF),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              _isScanning ? '기기를 검색하고 있습니다...' : '발견된 기기가 없습니다',
+                              style: const TextStyle(
+                                color: _cSub,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              '기기 전원이 켜져있는지, 블루투스가 광고 중인지 확인해 주세요.',
+                              style: TextStyle(
+                                color: _cSub,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                        : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _devices.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final device = _devices[index];
+                        final name = device.name.isEmpty ? '알 수 없는 기기 ${index + 1}' : device.name;
+                        final mac = device.id.id;
+
+                        return InkWell(
+                          onTap: () => Navigator.of(context).pop(device),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFFFFF),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: _cBorder),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: _cGreen.withOpacity(0.10),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: _cBorder),
+                                  ),
+                                  child: const Icon(Icons.bluetooth, color: _cGreen),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        name,
+                                        style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w900,
+                                          color: _cText,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'MAC  $mac',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: _cSub,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: _cGreen,
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: const Text(
+                                    '선택',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const Divider(height: 1, color: _cBorder),
+
+            // Footer Buttons
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 14),
+              child: Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _isScanning ? null : _startScanning,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _cText,
+                      side: const BorderSide(color: _cBorder),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('다시 검색', style: TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF374151),
+                      side: const BorderSide(color: _cBorder),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    ),
+                    child: const Text('취소', style: TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
