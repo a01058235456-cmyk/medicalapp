@@ -12,7 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import 'package:medicalapp/urlConfig.dart';
+import '../../../../urlConfig.dart';
 import 'patient_edit_dialog.dart';
 
 class _BlePacket {
@@ -185,7 +185,7 @@ class _PatientDetailDialogState extends ConsumerState<PatientDetailDialog> {
     final uri = Uri.parse('$_front_url/api/patient/profile?patient_code=$patientCode');
     final res = await http.get(uri, headers: await _headers());
 
-    debugPrint('[PROFILE] status=${res.statusCode} body=${res.body}');
+    // debugPrint('[PROFILE] status=${res.statusCode} body=${res.body}'); // 디버그 프린트 (그래프 데이터)
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('환자정보 조회 실패(HTTP ${res.statusCode})');
     }
@@ -2088,7 +2088,7 @@ class _ScanningDialogState extends State<_ScanningDialog> {
                             ),
                             const SizedBox(height: 8),
                             const Text(
-                              '기기 전원이 켜져있는지, 블루투스가 광고 중인지 확인해 주세요.',
+                              '기기 전원이 켜져있는지, 블루투스 기기를 확인해 주세요.',
                               style: TextStyle(
                                 color: _cSub,
                                 fontWeight: FontWeight.w600,

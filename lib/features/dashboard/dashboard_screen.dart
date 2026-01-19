@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
-import 'package:medicalapp/urlConfig.dart';
-import 'package:medicalapp/storage_keys.dart';
+import '../../../urlConfig.dart';
+import '../../../storage_keys.dart';
 
 import 'widgets/top_header.dart';
 import 'widgets/summary_cards.dart';

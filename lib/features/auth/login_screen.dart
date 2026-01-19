@@ -3,9 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
-// import 'package:http/http.dart' as http; // ✅ 이제 직접 http를 안 쓰면 지워도 됩니다.
-import 'package:medicalapp/storage_keys.dart';
-import 'package:medicalapp/urlConfig.dart';
+import '../../../../urlConfig.dart';
+import '../../../../storage_keys.dart';
 
 // ✅ 쿠키 세션 유지되는 http helper
 import '../../api/http_helper.dart';

@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
-import 'package:medicalapp/storage_keys.dart';
-import 'package:medicalapp/urlConfig.dart';
+import '../../../urlConfig.dart';
+import '../../../storage_keys.dart';
 
 class SummaryCards extends StatefulWidget {
   /// 대시보드에서 선택된 층 hospital_st_code

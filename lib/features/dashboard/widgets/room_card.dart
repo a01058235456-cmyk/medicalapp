@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import 'package:medicalapp/urlConfig.dart';
+import '../../../urlConfig.dart';
 import 'bed_tile.dart';
 
 import 'dialogs/patient_add_dialog.dart';
@@ -119,15 +119,15 @@ class _RoomsSectionState extends State<RoomsSection> {
   String? _error;
   List<FloorStructureRoom> _rooms = const [];
 
-  Timer? _poller; // ✅ 추가: 10초 폴링 타이머
+  Timer? _poller;
 
   @override
   void initState() {
     super.initState();
     _loadRooms();
 
-    // ✅ 추가: 10초마다 재조회(사이드 패널처럼 자동 갱신)
-    _poller = Timer.periodic(const Duration(seconds: 10000), (_) {
+    // ✅ 추가: 1사간 마다 재조회(사이드 패널처럼 자동 갱신)
+    _poller = Timer.periodic(const Duration(hours: 1), (_) {
       if (!mounted) return;
       if (_loading) return; // ✅ 겹침 방지
       _loadRooms();

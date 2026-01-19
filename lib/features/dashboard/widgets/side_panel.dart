@@ -6,8 +6,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 
-import 'package:medicalapp/urlConfig.dart';
-import 'package:medicalapp/storage_keys.dart';
+import '../../../urlConfig.dart';
+import '../../../storage_keys.dart';
 
 import 'patient_list_card.dart';
 import 'dialogs/patient_add_dialog.dart';
@@ -47,8 +47,8 @@ class _SidePanelState extends State<SidePanel> {
   Timer? _pollTimer;
   bool _refreshing = false;
 
-  // 원하는 주기만 바꾸면 됩니다 (예: 5초, 10초, 30초 등)
-  static const Duration _pollInterval = Duration(seconds: 10000);
+  // 1시간마다 재조회
+  static const Duration _pollInterval = Duration(hours: 1);
 
   @override
   void initState() {

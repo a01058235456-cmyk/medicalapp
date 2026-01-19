@@ -1,4 +1,4 @@
-import 'package:medicalapp/urlConfig.dart';
+import '../../../../urlConfig.dart';
 import 'http_helper.dart';
 
 class HospitalStructureApi {

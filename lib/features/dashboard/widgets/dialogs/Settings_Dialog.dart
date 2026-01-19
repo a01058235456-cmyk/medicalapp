@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:medicalapp/urlConfig.dart';
-import 'package:medicalapp/storage_keys.dart';
+import '../../../../urlConfig.dart';
+import '../../../../storage_keys.dart';
 
 // ✅ 쿠키 세션 유지되는 http helper
 import '../../../../api/http_helper.dart';
