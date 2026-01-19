@@ -24,6 +24,7 @@
 ---
 
 ## 📁 폴더 구조 
+```
 medicalapp/
 ├─ android/ # Android 네이티브 설정/빌드
 ├─ ios/ # iOS 네이티브 설정/빌드
@@ -67,6 +68,7 @@ medicalapp/
 ├─ pubspec.lock # 의존성 락 파일
 ├─ analysis_options.yaml # 린트/분석 설정(있는 경우)
 └─ .gitignore # Git 제외 파일 목록
+```
 ## 🚀 실행 방법
 
 ### 1) 의존성 설치
