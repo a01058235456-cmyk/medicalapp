@@ -29,6 +29,9 @@ class SettingsDialog extends StatefulWidget {
 class _SettingsDialogState extends State<SettingsDialog> {
   static const _storage = FlutterSecureStorage();
 
+  // ✅ (추가) 다이얼로그 내부에서만 SnackBar 띄우기 위한 키
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
   late final String _baseUrl;
   SettingsSection _section = SettingsSection.accountInfo;
 
@@ -62,9 +65,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
     super.dispose();
   }
 
+  // ✅ (수정) 반드시 다이얼로그 내부 ScaffoldMessenger로 띄우기
   void _snack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+
+    final messenger = _messengerKey.currentState;
+    if (messenger == null) return;
+
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(12),
+        ),
+      );
   }
 
   Future<void> loadData() async {
@@ -112,7 +128,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   /// ✅ 쿠키 세션 기반 PUT/DELETE/... (HttpHelper 사용)
-  Future<Map<String, dynamic>?> _sendJson(String method,
+  Future<Map<String, dynamic>?> _sendJson(
+      String method,
       Uri uri, {
         Map<String, dynamic>? body,
       }) async {
@@ -187,8 +204,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
     if (mounted) setState(() => _wardsLoading = true);
 
-    final uri = Uri.parse(
-        '$_baseUrl/api/hospital/structure/part?hospital_code=$code');
+    final uri =
+    Uri.parse('$_baseUrl/api/hospital/structure/part?hospital_code=$code');
     final decoded = await _getJson(uri);
 
     if (decoded == null || decoded['code'] != 1) {
@@ -211,8 +228,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       final name = (e['category_name']?.toString() ?? '').trim();
       final sort = int.tryParse(e['sort_order']?.toString() ?? '') ?? 0;
       if (st == null) continue;
-      list.add(
-          _WardItem(hospitalStCode: st, categoryName: name, sortOrder: sort));
+      list.add(_WardItem(hospitalStCode: st, categoryName: name, sortOrder: sort));
     }
 
     list.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
@@ -272,63 +288,58 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) =>
-          AlertDialog(
-            backgroundColor: const Color(0xFFFFFFFF),
-            surfaceTintColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Color(0xFFE5E7EB)),
-            ),
-            elevation: 2,
-            insetPadding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 16),
-            titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-            contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-            actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-            title: const Text(
-              '회원 탈퇴',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                color: Color(0xFF111827),
-              ),
-            ),
-            content: const Text(
-              '정말 탈퇴하시겠습니까?\n탈퇴 후에는 계정을 복구할 수 없습니다.',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 14,
-                color: Color(0xFF374151),
-                height: 1.35,
-              ),
-            ),
-            actions: [
-              TextButton(
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                ),
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFEF4444),
-                  foregroundColor: Colors.white,
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('탈퇴'),
-              ),
-            ],
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFFFF),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        elevation: 2,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+        title: const Text(
+          '회원 탈퇴',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 18,
+            color: Color(0xFF111827),
           ),
+        ),
+        content: const Text(
+          '정말 탈퇴하시겠습니까?\n탈퇴 후에는 계정을 복구할 수 없습니다.',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 14,
+            color: Color(0xFF374151),
+            height: 1.35,
+          ),
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF374151),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('탈퇴'),
+          ),
+        ],
+      ),
     );
 
     if (ok != true) return;
@@ -384,69 +395,64 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> _deleteWard(_WardItem w) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) =>
-          AlertDialog(
-            backgroundColor: const Color(0xFFFFFFFF),
-            surfaceTintColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Color(0xFFE5E7EB)),
-            ),
-            elevation: 2,
-            insetPadding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 16),
-            titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-            contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-            actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-            title: const Text(
-              '병동 삭제',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                color: Color(0xFF111827),
-              ),
-            ),
-            content: Text(
-              '정말 "${w.categoryName}" 병동을 삭제하시겠습니까?',
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 14,
-                color: Color(0xFF374151),
-                height: 1.35,
-              ),
-            ),
-            actions: [
-              TextButton(
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                ),
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFEF4444),
-                  foregroundColor: Colors.white,
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('삭제'),
-              ),
-            ],
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFFFF),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        elevation: 2,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+        title: const Text(
+          '병동 삭제',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 18,
+            color: Color(0xFF111827),
           ),
+        ),
+        content: Text(
+          '정말 "${w.categoryName}" 병동을 삭제하시겠습니까?',
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 14,
+            color: Color(0xFF374151),
+            height: 1.35,
+          ),
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF374151),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
     );
 
     if (ok != true) return;
 
-    final uri = Uri.parse(
-        '$_baseUrl/api/hospital/structure/delete/${w.hospitalStCode}');
+    final uri =
+    Uri.parse('$_baseUrl/api/hospital/structure/delete/${w.hospitalStCode}');
     final decoded = await _sendJson('DELETE', uri);
 
     if (decoded == null) {
@@ -466,131 +472,130 @@ class _SettingsDialogState extends State<SettingsDialog> {
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      child: Container(
-        width: 1120,
-        height: 720,
-        decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-          boxShadow: const [
-            BoxShadow(color: Color(0x14000000),
-                blurRadius: 20,
-                offset: Offset(0, 10)),
-          ],
-        ),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 16, 10, 12),
-              child: Row(
-                children: [
-                  const Text('설정', style: TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.w900)),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
+      // ✅ (추가) 다이얼로그 내부 스낵바 영역 고정
+      child: ScaffoldMessenger(
+        key: _messengerKey,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Container(
+            width: 1120,
+            height: 720,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x14000000),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
             ),
-            const Divider(height: 1),
-            Expanded(
-              child: Row(
-                children: [
-                  // 좌측 메뉴
-                  Container(
-                    width: 300,
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      border: Border(right: BorderSide(color: Color(
-                          0xFFE5E7EB))),
-                    ),
-                    child: ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      children: [
-                        const _MenuTitle('회원 관리'),
-                        _MenuItem(
-                          title: '회원정보',
-                          icon: Icons.badge_outlined,
-                          selected: _section == SettingsSection.accountInfo,
-                          onTap: () async {
-                            setState(() =>
-                            _section = SettingsSection.accountInfo);
-                            await loadData();
-                          },
-                        ),
-                        _MenuItem(
-                          title: '비밀번호 변경',
-                          icon: Icons.lock_outline,
-                          selected: _section == SettingsSection.password,
-                          onTap: () =>
-                              setState(() =>
-                              _section = SettingsSection.password),
-                        ),
-                        _MenuItem(
-                          title: '회원 탈퇴',
-                          icon: Icons.delete_outline,
-                          danger: true,
-                          selected: _section == SettingsSection.withdraw,
-                          onTap: () =>
-                              setState(() =>
-                              _section = SettingsSection.withdraw),
-                        ),
-                        const SizedBox(height: 10),
-                        const Divider(height: 1),
-                        const SizedBox(height: 10),
-                        const _MenuTitle('병동 관리'),
-                        _MenuItem(
-                          title: '병동 관리',
-                          icon: Icons.apartment_outlined,
-                          selected: _section == SettingsSection.wardManage,
-                          onTap: () async {
-                            setState(() =>
-                            _section = SettingsSection.wardManage);
-                            await loadData();
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                        const Divider(height: 1),
-                        const SizedBox(height: 10),
-                        const _MenuTitle('내 설정'),
-                        _MenuItem(
-                          title: '내 설정',
-                          icon: Icons.tune,
-                          selected: _section == SettingsSection.mySettings,
-                          onTap: () =>
-                              setState(() =>
-                              _section = SettingsSection.mySettings),
-                        ),
-                        const SizedBox(height: 10),
-                        const Divider(height: 1),
-                        const SizedBox(height: 10),
-                        const _MenuTitle('시스템 정보'),
-                        _MenuItem(
-                          title: '앱 버전',
-                          icon: Icons.info_outline,
-                          selected: _section == SettingsSection.systemInfo,
-                          onTap: () =>
-                              setState(() =>
-                              _section = SettingsSection.systemInfo),
-                        ),
-                      ],
-                    ),
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 10, 12),
+                  child: Row(
+                    children: [
+                      const Text('설정',
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
                   ),
-                  // 우측 내용
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(18),
-                      child: _loading ? const Center(
-                          child: CircularProgressIndicator()) : _buildContent(),
-                    ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: Row(
+                    children: [
+                      // 좌측 메뉴
+                      Container(
+                        width: 300,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          border: Border(right: BorderSide(color: Color(0xFFE5E7EB))),
+                        ),
+                        child: ListView(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          children: [
+                            const _MenuTitle('회원 관리'),
+                            _MenuItem(
+                              title: '회원정보',
+                              icon: Icons.badge_outlined,
+                              selected: _section == SettingsSection.accountInfo,
+                              onTap: () async {
+                                setState(() => _section = SettingsSection.accountInfo);
+                                await loadData();
+                              },
+                            ),
+                            _MenuItem(
+                              title: '비밀번호 변경',
+                              icon: Icons.lock_outline,
+                              selected: _section == SettingsSection.password,
+                              onTap: () => setState(() => _section = SettingsSection.password),
+                            ),
+                            _MenuItem(
+                              title: '회원 탈퇴',
+                              icon: Icons.delete_outline,
+                              danger: true,
+                              selected: _section == SettingsSection.withdraw,
+                              onTap: () => setState(() => _section = SettingsSection.withdraw),
+                            ),
+                            const SizedBox(height: 10),
+                            const Divider(height: 1),
+                            const SizedBox(height: 10),
+                            const _MenuTitle('병동 관리'),
+                            _MenuItem(
+                              title: '병동 관리',
+                              icon: Icons.apartment_outlined,
+                              selected: _section == SettingsSection.wardManage,
+                              onTap: () async {
+                                setState(() => _section = SettingsSection.wardManage);
+                                await loadData();
+                              },
+                            ),
+                            const SizedBox(height: 10),
+                            const Divider(height: 1),
+                            const SizedBox(height: 10),
+                            const _MenuTitle('내 설정'),
+                            _MenuItem(
+                              title: '내 설정',
+                              icon: Icons.tune,
+                              selected: _section == SettingsSection.mySettings,
+                              onTap: () => setState(() => _section = SettingsSection.mySettings),
+                            ),
+                            const SizedBox(height: 10),
+                            const Divider(height: 1),
+                            const SizedBox(height: 10),
+                            const _MenuTitle('시스템 정보'),
+                            _MenuItem(
+                              title: '앱 버전',
+                              icon: Icons.info_outline,
+                              selected: _section == SettingsSection.systemInfo,
+                              onTap: () => setState(() => _section = SettingsSection.systemInfo),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // 우측 내용
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: _loading
+                              ? const Center(child: CircularProgressIndicator())
+                              : _buildContent(),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -607,65 +612,58 @@ class _SettingsDialogState extends State<SettingsDialog> {
           onLogout: () async {
             final ok = await showDialog<bool>(
               context: context,
-              builder: (_) =>
-                  AlertDialog(
-                    backgroundColor: const Color(0xFFFFFFFF),
-                    surfaceTintColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      side: const BorderSide(color: Color(0xFFE5E7EB)),
-                    ),
-                    elevation: 2,
-                    insetPadding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 16),
-                    titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-                    contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                    actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-                    title: const Text(
-                      '로그아웃',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 18,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                    content: const Text(
-                      '로그아웃 하시겠습니까?',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 14,
-                        color: Color(0xFF374151),
-                        height: 1.35,
-                      ),
-                    ),
-                    actions: [
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF374151),
-                          textStyle: const TextStyle(
-                              fontWeight: FontWeight.w900),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
-                        ),
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('취소'),
-                      ),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF22C55E),
-                          foregroundColor: Colors.white,
-                          textStyle: const TextStyle(
-                              fontWeight: FontWeight.w900),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('로그아웃'),
-                      ),
-                    ],
+              builder: (_) => AlertDialog(
+                backgroundColor: const Color(0xFFFFFFFF),
+                surfaceTintColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFFE5E7EB)),
+                ),
+                elevation: 2,
+                insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+                contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+                title: const Text(
+                  '로그아웃',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    color: Color(0xFF111827),
                   ),
+                ),
+                content: const Text(
+                  '로그아웃 하시겠습니까?',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                    color: Color(0xFF374151),
+                    height: 1.35,
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF374151),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('취소'),
+                  ),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF22C55E),
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('로그아웃'),
+                  ),
+                ],
+              ),
             );
 
             if (ok == true) await _logout();
@@ -701,116 +699,108 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
-  static Future<String?> _showTextDialog(BuildContext context, {
-    required String title,
-    String? initial,
-    required String hint,
-  }) async {
+  static Future<String?> _showTextDialog(
+      BuildContext context, {
+        required String title,
+        String? initial,
+        required String hint,
+      }) async {
     final ctrl = TextEditingController(text: initial ?? '');
 
     return showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) =>
-          AlertDialog(
-            backgroundColor: const Color(0xFFFFFFFF),
-            surfaceTintColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Color(0xFFE5E7EB)),
-            ),
-            elevation: 2,
-            insetPadding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 16),
-
-            titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-            contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-            actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-
-            title: Text(
-              title,
-              style: const TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                color: Color(0xFF111827),
-              ),
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: ctrl,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    hintText: hint,
-                    filled: true,
-                    fillColor: const Color(0xFFF9FAFB),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(
-                          color: Color(0xFF22C55E), width: 1.6),
-                    ),
-                  ),
-                  onSubmitted: (_) {
-                    final v = ctrl.text.trim();
-                    if (v.isEmpty) return;
-                    Navigator.pop(ctx, v);
-                  },
-                ),
-                const SizedBox(height: 4),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '이름을 입력한 뒤 저장을 눌러주세요.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF6B7280),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF22C55E),
-                  foregroundColor: Colors.white,
-                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () {
-                  final v = ctrl.text.trim();
-                  if (v.isEmpty) return;
-                  Navigator.pop(ctx, v);
-                },
-                child: const Text('저장'),
-              ),
-            ],
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFFFF),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        elevation: 2,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+        title: Text(
+          title,
+          style: const TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 18,
+            color: Color(0xFF111827),
           ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: hint,
+                filled: true,
+                fillColor: const Color(0xFFF9FAFB),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFF22C55E), width: 1.6),
+                ),
+              ),
+              onSubmitted: (_) {
+                final v = ctrl.text.trim();
+                if (v.isEmpty) return;
+                Navigator.pop(ctx, v);
+              },
+            ),
+            const SizedBox(height: 4),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '이름을 입력한 뒤 저장을 눌러주세요.',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF6B7280),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF374151),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF22C55E),
+              foregroundColor: Colors.white,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.isEmpty) return;
+              Navigator.pop(ctx, v);
+            },
+            child: const Text('저장'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -885,7 +875,10 @@ class _WardManageView extends StatelessWidget {
                         Expanded(
                           child: Text(
                             w.categoryName,
-                            style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF111827)),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w900,
+                              color: Color(0xFF111827),
+                            ),
                           ),
                         ),
                         IconButton(
@@ -935,7 +928,11 @@ class _MenuTitle extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF6B7280)),
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+          color: Color(0xFF6B7280),
+        ),
       ),
     );
   }
@@ -977,7 +974,12 @@ class _MenuItem extends StatelessWidget {
           children: [
             Icon(icon, size: 20, color: fg),
             const SizedBox(width: 10),
-            Expanded(child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, color: fg))),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(fontWeight: FontWeight.w800, color: fg),
+              ),
+            ),
             if (selected) const Icon(Icons.chevron_right, color: Color(0xFF6B7280)),
           ],
         ),
@@ -1116,7 +1118,11 @@ class _PasswordChangeView extends StatelessWidget {
             child: FilledButton(
               onPressed: saving ? null : onSubmit,
               child: saving
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
                   : const Text('변경'),
             ),
           ),
@@ -1210,9 +1216,14 @@ class _InfoRow extends StatelessWidget {
       children: [
         SizedBox(
           width: 120,
-          child: Text(label, style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w800)),
+          child: Text(
+            label,
+            style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w800),
+          ),
         ),
-        Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.w900))),
+        Expanded(
+          child: Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+        ),
       ],
     );
   }

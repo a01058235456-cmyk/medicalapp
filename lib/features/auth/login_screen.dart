@@ -240,7 +240,7 @@ class _LoginScreenState extends State<LoginScreen> {
         loading = false;
         authed = false;
       });
-      _snack('로그인 실패: $e');
+      _snack('로그인 실패 ID와 PASSWORD를 확인해주세요.');
     }
   }
 
